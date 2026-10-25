@@ -50,6 +50,15 @@ People trust GridCraft with their numbers; a crash loses their work. **This outr
 - Shell gotcha: `mv`/`cp` are aliased interactive here — use `/bin/mv -f` / `/bin/cp -f`. macOS has no `timeout`; use `perl -e 'alarm 60; exec @ARGV' cmd`.
 - Parallel agents: separate `CARGO_TARGET_DIR` per agent; edit only the crates you own; delete your target dir when done.
 
+## Mirai Assistant authentication
+
+- Mirai Assistant uses only the official Claude Code CLI and the user's officially supported
+  account sign-in. Never extract or copy its credentials.
+- No API-key, alternate-provider or private-service fallback. Verify the effective authentication
+  method before sending document text and reject unsupported methods, including ambient API keys.
+- Proposals require human review; never automatically apply generated text or enable Claude tools.
+- Keep changes independent from WordCraft's ongoing visual redesign.
+
 ## Roadmap
 `ROADMAP.md` (committed) is the one-page summary: stage, headline numbers, dimensions, languages, progress log. It follows craftrules `standards/progress-docs.md` and points at the detail in `docs/`: `target-app-parity.md` (authoritative assessment), `gaps.md` (ranked work list: pick from it), `roadmap.md` (current focus, beta gates, milestones), `architecture.md`, and the area checklists `function-parity.md`, `chart-parity.md`, `file-format-parity.md`, `ui-parity.md`, `hardware-parity.md`, `localization-parity.md`. Update the affected docs (and their timestamp lines and revision history) whenever work lands. `cargo xtask parity` regenerates `docs/parity-checklist.md` from `crates/engine/src/catalog.rs`.
 

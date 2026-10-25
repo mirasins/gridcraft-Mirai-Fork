@@ -6,6 +6,7 @@
 //! gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
 //! gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
 //! gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
+//! gridcraft-cli mirai --in FILE --range A1:B2 --instruction '...' [--sheet NAME] [--model ALIAS]
 //! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet]
 //! gridcraft-cli commands [--json] [--search X]
 //! gridcraft-cli functions [--json] [--search X] [--category C]
@@ -30,6 +31,7 @@ macro_rules! outln {
 }
 
 mod check;
+mod mirai;
 
 use gridcraft_engine::Session;
 use serde_json::{Value, json};
@@ -41,6 +43,8 @@ const USAGE: &str = "usage:
   gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
   gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
                      cached-value calc oracle + XLSX round-trip fidelity (exit 1 on any difference)
+  gridcraft-cli mirai --in FILE --range A1:B2 --instruction '...' [--sheet NAME] [--model ALIAS]
+                     Mirai Assistant preview as JSON; nothing is applied or written (needs `claude` signed in)
   gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl]
                      [--out FILE] [--print RANGE] [--quiet]
                      a script line is id={json} or {\"command\": \"id\", \"params\": {…}};
@@ -79,6 +83,7 @@ fn main() -> ExitCode {
         Some("cat") => cat(rest),
         Some("run") => run(rest),
         Some("check") => return check::main(rest),
+        Some("mirai") => mirai::run(rest),
         Some("commands") => commands(rest),
         Some("functions") => functions(rest),
         Some("mcp") => mcp(rest),

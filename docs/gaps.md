@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (§8: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (§22: Mirai Assistant fork adaptation under validation; previous: §8 PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -166,7 +166,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 22. AI features (F)
 - No in-app assistant, natural-language formulas or Analyze Data; agent control via MCP is
-  already strong. **Estimate:** 30–50 h; model choice needs the owner.
+  already strong. **Estimate:** 30–50 h.
+- **Fork update (2026-10-24):** the owner chose official Claude Code account authentication for
+  [Mirai Assistant](mirai-assistant.md). Bounded context/apply commands and a proposal-only CLI
+  are under validation; the desktop review UI and real-account checks remain pending.
 
 ### 23. Mobile (platform)
 - No iOS, iPadOS or Android layout. **Estimate:** 30–60 h.
@@ -179,6 +182,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | §22: owner chose official Claude Code sign-in; Mirai backend/CLI under validation, desktop assistant still absent; estimates unchanged |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |

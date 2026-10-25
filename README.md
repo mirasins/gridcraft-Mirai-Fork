@@ -13,6 +13,11 @@
 
 <h1 align="center">GridCraft</h1>
 
+> **Mirai Fork:** [Mirai Assistant](docs/mirai-assistant.md) is being adapted to spreadsheets.
+> This experimental branch adds a backend foundation and proposal-only CLI, with known
+> full-CI failures documented in the link above;
+> it does not yet include a desktop assistant panel. Uses official Claude Code account sign-in only.
+
 <p align="center">
   <b>Spreadsheets and data; an open-source, high-performance modern spreadsheet application, built in pure Rust.</b>
 </p>

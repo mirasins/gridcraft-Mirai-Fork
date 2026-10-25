@@ -1,10 +1,18 @@
 # Architecture
 
+> **Fork update (2026-10-24, minor):** Mirai Assistant adaptation under validation; see
+> [mirai-assistant.md](mirai-assistant.md). Existing layer and readiness assessments are unchanged.
+
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-24 · **Change:** minor (engine building blocks for multi-command actions) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
 ## Workspace and layering
+
+The fork adds `gridcraft-assistant` at L4: a standalone official Claude Code client with no engine
+or UI dependency. `gridcraft-cli mirai` consumes it for proposal-only output. The engine owns the
+separate `assistant.context` and `assistant.apply` commands; network generation is never a side
+effect of reading context or applying a reviewed change.
 
 An engine-first Cargo workspace. Layering is enforced by `cargo xtask layers`; nothing below L6
 depends on egui, eframe, winit or rfd, so the UI crate is swappable. Line counts are Rust lines
@@ -117,6 +125,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Fork: standalone L4 Mirai client, CLI proposal generation and engine-only context/apply boundary; under validation |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
 | 2026-10-14 | minor | Document Undo's retained-cell-storage budget and latest-step guarantee |
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |
