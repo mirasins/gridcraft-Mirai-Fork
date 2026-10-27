@@ -2250,6 +2250,14 @@ fn review(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
+    let assistant_open = app.assistant.open;
+    let __k = big_button(ui, Icon::Comment, "Mirai\nAssistant", "Mirai Assistant", false);
+    if assistant_open {
+        ui.painter().rect_stroke(__k.rect, 5.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), StrokeKind::Inside);
+    }
+    if __k.clicked() {
+        act(app, "ui.assistant", json!({"value": !assistant_open}));
+    }
     sep(ui);
     let protected = app.session.active().and_then(|d| d.wb.active().map(|s| s.is_protected())).unwrap_or(false);
     let __k = big_button(ui, Icon::Lock, if protected { "Unprotect\nSheet" } else { "Protect\nSheet" }, "Protect Sheet", false);

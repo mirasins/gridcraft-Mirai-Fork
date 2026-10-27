@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod assistant_pane;
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
@@ -264,6 +265,8 @@ pub struct SheetApp {
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
     pub control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     pub grid: grid::GridState,
+    /// The Mirai Assistant pane (ephemeral; see [`assistant_pane`]).
+    pub assistant: assistant_pane::State,
     pub perf: Perf,
     pub fonts_ready: bool,
     fonts_set: bool,
@@ -325,6 +328,7 @@ impl SheetApp {
             print_feedback_seen: None,
             synthetic: Default::default(),
             control_rx: None,
+            assistant: Default::default(),
             grid: grid::GridState {
                 last_border: "bottom".into(),
                 last_fill: "#FFFF00".into(),
@@ -728,6 +732,7 @@ impl SheetApp {
                 self.notice = None;
                 Ok(Json::Null)
             }
+            id if id.starts_with("ui.assistant") => assistant_pane::command(self, id, p),
             _ => return None,
         };
         Some(r)
@@ -1233,6 +1238,7 @@ impl SheetApp {
             ctx.request_repaint();
         }
         control::poll(self, ctx);
+        assistant_pane::poll(self, ctx);
         self.guard_window_close(ctx);
         // Files read asynchronously (web file picker, dropped files).
         let arrived: Vec<(String, Vec<u8>)> = self
@@ -1313,6 +1319,7 @@ impl SheetApp {
             tabs::sheet_tabs(self, ui);
             pivot_pane::show(self, ui);
             panes::show(self, ui);
+            assistant_pane::show(self, ui);
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {
                 let g0 = now_ms();
                 grid::show(self, ui);

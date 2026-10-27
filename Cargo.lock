@@ -1527,6 +1527,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gridcraft-assistant"
+version = "0.11.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "gridcraft-calc"
 version = "0.11.1"
 dependencies = [
@@ -1650,6 +1659,7 @@ dependencies = [
  "egui",
  "egui_kittest",
  "epaint_default_fonts",
+ "gridcraft-assistant",
  "gridcraft-chart",
  "gridcraft-engine",
  "gridcraft-xlsx",

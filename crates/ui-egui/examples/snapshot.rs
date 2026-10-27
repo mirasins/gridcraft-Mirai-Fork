@@ -92,7 +92,9 @@ fn main() {
     }
     for c in &cmds {
         let (id, p) = c.split_once('=').map(|(a, b)| (a.to_string(), serde_json::from_str(b).unwrap_or(json!({})))).unwrap_or((c.clone(), json!({})));
-        if let Err(e) = session.execute(&id, p) {
+        if !id.starts_with("ui.")
+            && let Err(e) = session.execute(&id, p)
+        {
             eprintln!("{id}: {e}");
         }
     }
@@ -105,6 +107,17 @@ fn main() {
             },
             {
                 let mut app = SheetApp::new(session, Default::default());
+                // UI commands (including the assistant pane) go through the app dispatcher;
+                // the loop above already ran document commands on the session.
+                for c in &cmds {
+                    let (id, p) =
+                        c.split_once('=').map(|(a, b)| (a, serde_json::from_str(b).unwrap_or(json!({})))).unwrap_or((c.as_str(), json!({})));
+                    if id.starts_with("ui.")
+                        && let Err(e) = app.run(id, p)
+                    {
+                        eprintln!("{id}: {e}");
+                    }
+                }
                 app.ui.dark = dark;
                 if let Some(code) = &language
                     && let Some(l) = gridcraft_ui_egui::i18n::Language::parse(code)

@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (accounting negatives such as `$(1,234)` read as numbers; INDEX with one index on a 2-D reference is #REF! as in Excel; earlier: Page Setup paper sizes: JIS B4/B5/B6, the Japanese postcards and envelopes, and A6; long flat operator chains up to Excel's formula limit) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (first Mirai selected-cell text assistant; formulas/workbook analysis remain open) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -67,7 +67,7 @@ collaboration, mobile, AI).
 | Hardware (multi-core calc, GPU, pen, multi-window) | ~40% | 25–40 | [hardware-parity.md](docs/hardware-parity.md) |
 | Platforms | ~80% (no iOS/Android; ahead on Linux, BSD, RISC-V) | 30–60 | [target-app-parity.md](docs/target-app-parity.md#platforms) |
 | Ecosystem / add-ins | ~10% (VBA out of scope; own scripts, MCP, CLI) | 25–40 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
-| AI features | ~15% (agent control strong; no in-app assistant) | 30–50 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
+| AI features | ~20% (agent control strong; selected-cell Mirai text assistant) | 25–45 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
 | **Total** | **~50%** | **~700–1,100** | |
 
 ## Features
@@ -132,6 +132,9 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 7. **Localization**: extend the catalog past the ribbon, then the twelve languages: 100–165 h.
 
 ## Progress log
+
+- 2026-10-26: M7: first Mirai panel for selected ordinary cells, with explicit per-request consent, local official Claude Code transport, background/cancellable requests, review-before-apply and one-step undo. Engine snapshots are limited to 256 plain cells/64 KiB; formulas, pictures, merges, tables, spills and protected sheets are refused; model output is literal text, never formulas or commands. Transport (34), engine (18) and UI (8) focused tests, workspace Clippy, WASM, layers/assets/parity/keytips pass; screenshot checked. Full suite has one isolated UI `header_autofit::table_filter_autofit_works_through_command_and_header_double_click` failure (`heading overlaps filter` at 50% zoom), reproduced alone and in the suite; the test's source was untouched. No live account request.
+
 
 | Date | What landed |
 |---|---|
@@ -226,6 +229,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | M7: first selected-cell Mirai writing assistant; standalone official-Claude transport, explicit consent, bounded revision-checked literal text apply and one undo step. |
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |
 | 2026-10-23 | minor | Progress log: INDEX with one index on a 2-D reference is #REF! |
 | 2026-10-22 | trivial | Progress log: formula hardening (#2163, #2162) |
