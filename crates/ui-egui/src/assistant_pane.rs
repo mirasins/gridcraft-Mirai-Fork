@@ -105,8 +105,10 @@ pub struct State {
     pub open: bool,
     pub instruction: String,
     pub model: String,
-    /// The per-request consent box. It is cleared after every send and on cancel or workbook change.
-    pub consent: bool,
+    /// Warning modal visibility
+    pub show_warning: bool,
+    /// Whether user confirmed the warning
+    pub consent_given: bool,
     pub history: Vec<String>,
     pub status: Option<Note>,
     /// Workbook (document uid) this conversation belongs to.
@@ -118,13 +120,14 @@ pub struct State {
 }
 
 impl State {
-    /// Stops the running request (if any): its answer is dropped unread. Clears the consent box.
+    /// Stops the running request (if any): its answer is dropped unread. Resets warning state.
     fn cancel(&mut self) {
         if let Some(worker) = self.worker.take() {
             worker.cancel.store(true, Ordering::SeqCst);
         }
         self.pending = None;
-        self.consent = false;
+        self.show_warning = false;
+        self.consent_given = false;
     }
 }
 
@@ -366,7 +369,8 @@ fn request(app: &mut SheetApp, instruction: Option<&str>, model: Option<&str>, c
     app.assistant.owner = Some(owner);
     app.assistant.pending = Some(context);
     app.assistant.proposal = None;
-    app.assistant.consent = false;
+    app.assistant.show_warning = false;
+    app.assistant.consent_given = false;
     app.assistant.open = true;
     app.assistant.status = Some(note(false, "Asking Claude Code…"));
     app.assistant.instruction.clear();
@@ -415,7 +419,8 @@ fn status_json(app: &SheetApp) -> Json {
         "open": state.open,
         "supported": SUPPORTED,
         "pending": state.worker.is_some(),
-        "consent": state.consent,
+        "show_warning": state.show_warning,
+        "consent_given": state.consent_given,
         "proposal": state.proposal.as_ref().map(|p| json!({"changes": p.rows.len(), "explanation": p.explanation})),
         "status": state.status.as_ref().map(|n| n.text.clone()),
         "error": state.status.as_ref().is_some_and(|n| n.error),
@@ -580,27 +585,66 @@ fn composer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     );
     clamp_text(&mut app.assistant.instruction, MAX_INSTRUCTION_BYTES);
     clamp_text(&mut app.assistant.model, MAX_MODEL_BYTES);
-    ui.checkbox(&mut app.assistant.consent, "Send the selected cells' text to Claude Code, for this request only");
+    
+    // Show warning modal instead of checkbox
+    if app.assistant.show_warning {
+        egui::Window::new("Warning")
+            .collapsible(false)
+            .resizable(false)
+            .default_pos(egui::pos2(100.0, 100.0))
+            .show(ui.ctx(), |ui| {
+                ui.label("You are about to send the selected cells' text to Claude Code.");
+                ui.label("This action cannot be undone.");
+                ui.label("");
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        app.assistant.show_warning = false;
+                        app.assistant.consent_given = false;
+                    }
+                    if ui.button("Continue").clicked() {
+                        app.assistant.show_warning = false;
+                        app.assistant.consent_given = true;
+                    }
+                });
+                // Close with Enter or Escape
+                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    app.assistant.show_warning = false;
+                    app.assistant.consent_given = true;
+                }
+                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    app.assistant.show_warning = false;
+                    app.assistant.consent_given = false;
+                }
+            });
+    }
+    
     let ready = SUPPORTED && !pending && active(app).is_some() && !app.assistant.instruction.trim().is_empty();
     let mut send = false;
     ui.horizontal(|ui| {
-        send = ui.add_enabled(ready && app.assistant.consent, egui::Button::new("Send")).clicked();
+        send = ui.add_enabled(ready, egui::Button::new("Send")).clicked();
         let hint = if !SUPPORTED {
             "Desktop app only."
-        } else if !app.assistant.consent {
-            "Tick the consent box to allow sending."
         } else {
             ""
         };
         ui.label(RichText::new(hint).small().color(t.text_dim));
     });
     if send {
-        let confirmed = app.assistant.consent;
+        // Show warning before sending
+        app.assistant.show_warning = true;
+        app.assistant.consent_given = false;
+    }
+    
+    // If warning was accepted, proceed with send and reset the flag
+    if app.assistant.consent_given {
+        let confirmed = true;
         let instruction = app.assistant.instruction.clone();
         let model = app.assistant.model.clone();
         if let Err(error) = request(app, Some(&instruction), Some(&model), confirmed) {
             app.assistant.status = Some(note(true, error));
         }
+        // Reset the flag so we don't send again on next frame
+        app.assistant.consent_given = false;
     }
 }
 
@@ -694,11 +738,12 @@ mod tests {
         let mut app = app();
         let flag = running(&mut app);
         app.assistant.open = true;
-        app.assistant.consent = true;
+        app.assistant.show_warning = false;
+        app.assistant.consent_given = true;
         set_open(&mut app, false);
         assert!(flag.load(Ordering::SeqCst));
         assert!(app.assistant.worker.is_none());
-        assert!(!app.assistant.consent);
+        assert!(!app.assistant.consent_given);
 
         let flag = running(&mut app);
         app.run("ui.assistant.newConversation", json!({})).unwrap_or(Json::Null);

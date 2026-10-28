@@ -139,8 +139,6 @@ fn check_plain(sh: &Sheet, at: CellRef) -> Result<()> {
         "holds a picture"
     } else if sh.merge_at(at).is_some() {
         "is part of a merged cell"
-    } else if sh.tables.iter().any(|t| t.range.contains(at)) {
-        "is in a table"
     } else if sh.spill_anchor(at).is_some() || sh.spill_ranges.contains_key(&at) {
         "is part of a spilled array"
     } else {
