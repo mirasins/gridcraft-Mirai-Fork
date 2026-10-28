@@ -324,19 +324,19 @@ fn request(app: &mut SheetApp, instruction: Option<&str>, model: Option<&str>, c
     if app.assistant.worker.is_some() {
         return Err("A request is already running. Wait for it or cancel it.".into());
     }
-    if let Some(text) = instruction {
-        app.assistant.instruction = text.to_string();
+    let raw_text = instruction.unwrap_or(&app.assistant.instruction);
+    if raw_text.len() > MAX_INSTRUCTION_BYTES {
+        return Err(format!("The instruction is longer than {MAX_INSTRUCTION_BYTES} bytes."));
     }
-    if let Some(name) = model {
-        app.assistant.model = name.to_string();
-    }
-    let text = app.assistant.instruction.trim().to_string();
+    let text = raw_text.trim().to_string();
     if text.is_empty() {
         return Err("Write what the assistant should do.".into());
     }
-    if text.len() > MAX_INSTRUCTION_BYTES {
-        return Err(format!("The instruction is longer than {MAX_INSTRUCTION_BYTES} bytes."));
+    let raw_model = model.unwrap_or(&app.assistant.model);
+    if raw_model.len() > MAX_MODEL_BYTES {
+        return Err(format!("The model is longer than {MAX_MODEL_BYTES} bytes."));
     }
+    let model = gridcraft_assistant::model_name(Some(raw_model)).map_err(|e| e.to_string())?.unwrap_or_default();
     let (owner, revision) = active(app).ok_or("Open a workbook first.")?;
     let raw = app.run("assistant.context", json!({}))?;
     let context = parse_context(&raw, owner, revision)?;
@@ -347,7 +347,7 @@ fn request(app: &mut SheetApp, instruction: Option<&str>, model: Option<&str>, c
         context: None,
     };
     request.validate().map_err(|e| e.to_string())?;
-    let model = app.assistant.model.trim().to_string();
+    app.assistant.model = model.clone();
     let cancel = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&cancel);
     let (tx, rx) = mpsc::channel();
@@ -670,6 +670,23 @@ mod tests {
         let long = "x".repeat(MAX_INSTRUCTION_BYTES + 1);
         assert!(request(&mut app, Some(&long), None, true).is_err());
         assert!(app.assistant.worker.is_none());
+    }
+
+    #[test]
+    fn invalid_inputs_leave_draft_unchanged_and_do_not_start_worker() {
+        let mut app = app();
+        app.assistant.instruction = "draft".into();
+        app.assistant.model = "valid-model".into();
+        for (instruction, model) in [
+            ("short".to_string(), "--bad".to_string()),
+            ("short".to_string(), "x".repeat(MAX_MODEL_BYTES + 1)),
+            (format!("{}x", " ".repeat(MAX_INSTRUCTION_BYTES)), "valid-model".to_string()),
+        ] {
+            assert!(request(&mut app, Some(&instruction), Some(&model), true).is_err());
+            assert!(app.assistant.worker.is_none());
+            assert_eq!(app.assistant.instruction, "draft");
+            assert_eq!(app.assistant.model, "valid-model");
+        }
     }
 
     #[test]
