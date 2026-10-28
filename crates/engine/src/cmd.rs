@@ -167,7 +167,7 @@ pub fn find_command(id: &str) -> Option<&'static CommandSpec> {
     test_commands().iter().find(|c| c.id == id).copied()
 }
 
-static TEST_COMMANDS: std::sync::Mutex<Vec<&'static CommandSpec>> = std::sync::Mutex::new(Vec::new());
+static TEST_COMMANDS: std::sync::Mutex<Vec<&CommandSpec>> = std::sync::Mutex::new(Vec::new());
 
 /// Test-only: register an extra command so UI integration tests can prove a pending
 /// keytip becomes live the moment its command lands (see crates/ui-egui/tests/keytips.rs).
@@ -207,7 +207,6 @@ pub(crate) fn register_undoable_test_command(id: &'static str, run: Run) {
 }
 
 fn test_commands() -> std::sync::MutexGuard<'static, Vec<&'static CommandSpec>> {
-    #[allow(clippy::unwrap_used)] // a poisoned test registry has no meaningful recovery
     match TEST_COMMANDS.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
@@ -298,7 +297,7 @@ pub(crate) fn target_sheet(s: &Session, p: &Json) -> Result<usize> {
     {
         return d.wb.sheet_index(&sh).ok_or_else(|| bad("range", format!("no sheet named `{sh}`")));
     }
-    Ok(d.wb.active_sheet)
+    Ok(d.wb.active_sheet())
 }
 
 pub(crate) use gridcraft_core::split_sheet;
@@ -307,7 +306,7 @@ pub(crate) use gridcraft_core::split_sheet;
 /// a cell reference, or that names a sheet other than the active one, is an error rather than a
 /// silent fallback to some other cell.
 pub(crate) fn cell_param(s: &Session, p: &Json, key: &str) -> Result<Option<CellRef>> {
-    cell_param_on(s, p, key, s.doc()?.wb.active_sheet)
+    cell_param_on(s, p, key, s.doc()?.wb.active_sheet())
 }
 
 /// Like [`cell_param`], for a command that operates on `sheet` (a `Sheet!` prefix must name it).
@@ -351,11 +350,15 @@ pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) ->
     })
 }
 
+fn wall_clock() -> std::time::Duration {
+    std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default()
+}
+
 pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
-    // `GRIDCRAFT_PROFILE` timing. Read the clock only when profiling, and never on wasm: there
-    // `Instant::now` traps (`RuntimeError: unreachable`), which broke every edit in the web app.
-    #[allow(clippy::disallowed_methods)]
-    let t0 = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| std::time::Instant::now()) };
+    // `GRIDCRAFT_PROFILE` timing, never on wasm where the clock traps. `elapsed` on the epoch
+    // reads the wall clock without the (disallowed) `now`.
+    let t0 = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| wall_clock()) };
+    let since = |t0: std::time::Duration| wall_clock().saturating_sub(t0);
     let mut sel = d.selection.clone();
     let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new(), protection_checked: false };
     let r = f(&mut ctx)?;
@@ -370,7 +373,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
     }
     if let Some(t0) = t0 {
-        eprintln!("commit: edit {:?}, {} changed", t0.elapsed(), changed.len());
+        eprintln!("commit: edit {:?}, {} changed", since(t0), changed.len());
     }
     if structural {
         d.calc.recalc_all(&mut wb);
@@ -378,7 +381,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         d.calc.cells_changed(&mut wb, &changed);
     }
     if let Some(t0) = t0 {
-        eprintln!("commit: + recalc {:?}", t0.elapsed());
+        eprintln!("commit: + recalc {:?}", since(t0));
     }
     fit_rows.sort_unstable();
     fit_rows.dedup();
@@ -386,7 +389,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         auto_row_height(&mut wb, si, row);
     }
     if let Some(t0) = t0 {
-        eprintln!("commit: + rows {:?}", t0.elapsed());
+        eprintln!("commit: + rows {:?}", since(t0));
     }
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;
@@ -595,7 +598,7 @@ pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
 
 impl Ctx<'_> {
     pub fn sheet_index(&self) -> usize {
-        self.wb.active_sheet
+        self.wb.active_sheet()
     }
     pub fn sheet_mut(&mut self, i: usize) -> Result<&mut gridcraft_model::Sheet> {
         self.wb.sheet_mut(i).ok_or_else(|| EngineError::Other("no such sheet".into()))

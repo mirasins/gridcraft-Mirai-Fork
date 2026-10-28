@@ -9,7 +9,7 @@ use gridcraft_model::Sheet;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, bad, cmd, has_doc};
 use crate::{EngineError, Result, Session};
 
 /// Most cells one snapshot holds (checked on the selection's area before any cell is visited) and
@@ -100,7 +100,7 @@ fn context(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn snapshot(s: &Session) -> Result<Snapshot> {
     let d = s.doc()?;
-    let si = d.wb.active_sheet;
+    let si = d.wb.active_sheet();
     let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
     if sh.is_protected() {
         return Err(refuse(PROTECTED));
