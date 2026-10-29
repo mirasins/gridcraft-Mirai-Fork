@@ -585,48 +585,40 @@ fn composer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     );
     clamp_text(&mut app.assistant.instruction, MAX_INSTRUCTION_BYTES);
     clamp_text(&mut app.assistant.model, MAX_MODEL_BYTES);
-    
+
     // Show warning modal instead of checkbox
     if app.assistant.show_warning {
-        egui::Window::new("Warning")
-            .collapsible(false)
-            .resizable(false)
-            .default_pos(egui::pos2(100.0, 100.0))
-            .show(ui.ctx(), |ui| {
-                ui.label("You are about to send the selected cells' text to Claude Code.");
-                ui.label("This action cannot be undone.");
-                ui.label("");
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        app.assistant.show_warning = false;
-                        app.assistant.consent_given = false;
-                    }
-                    if ui.button("Continue").clicked() {
-                        app.assistant.show_warning = false;
-                        app.assistant.consent_given = true;
-                    }
-                });
-                // Close with Enter or Escape
-                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    app.assistant.show_warning = false;
-                    app.assistant.consent_given = true;
-                }
-                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        egui::Window::new("Warning").collapsible(false).resizable(false).default_pos(egui::pos2(100.0, 100.0)).show(ui.ctx(), |ui| {
+            ui.label("You are about to send the selected cells' text to Claude Code.");
+            ui.label("This action cannot be undone.");
+            ui.label("");
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
                     app.assistant.show_warning = false;
                     app.assistant.consent_given = false;
                 }
+                if ui.button("Continue").clicked() {
+                    app.assistant.show_warning = false;
+                    app.assistant.consent_given = true;
+                }
             });
+            // Close with Enter or Escape
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                app.assistant.show_warning = false;
+                app.assistant.consent_given = true;
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                app.assistant.show_warning = false;
+                app.assistant.consent_given = false;
+            }
+        });
     }
-    
+
     let ready = SUPPORTED && !pending && active(app).is_some() && !app.assistant.instruction.trim().is_empty();
     let mut send = false;
     ui.horizontal(|ui| {
         send = ui.add_enabled(ready, egui::Button::new("Send")).clicked();
-        let hint = if !SUPPORTED {
-            "Desktop app only."
-        } else {
-            ""
-        };
+        let hint = if !SUPPORTED { "Desktop app only." } else { "" };
         ui.label(RichText::new(hint).small().color(t.text_dim));
     });
     if send {
@@ -634,7 +626,7 @@ fn composer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
         app.assistant.show_warning = true;
         app.assistant.consent_given = false;
     }
-    
+
     // If warning was accepted, proceed with send and reset the flag
     if app.assistant.consent_given {
         let confirmed = true;
