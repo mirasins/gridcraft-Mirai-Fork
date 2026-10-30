@@ -464,7 +464,8 @@ pub(crate) fn refuse_unless_allowed(s: &Session, sheet: usize, what: &str, pick:
 
 /// Whether a locked cell on a protected sheet stays locked: `None` when it's in an Allow Edit
 /// Range without a password or one unlocked in this session, else the message to show.
-pub(crate) fn locked_cell_error(sh: &gridcraft_model::Sheet, c: CellRef, unlocked: &[(String, String)]) -> Option<String> {
+/// Public so the UI can refuse an edit of a locked cell before a draft opens (#2945).
+pub fn locked_cell_error(sh: &gridcraft_model::Sheet, c: CellRef, unlocked: &[(String, String)]) -> Option<String> {
     let mut needs_password = None;
     for r in sh.edit_ranges.iter().filter(|r| r.contains(c)) {
         if r.password.is_none() || unlocked.iter().any(|(s, t)| *s == sh.name && *t == r.title) {

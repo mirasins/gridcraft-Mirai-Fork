@@ -15,6 +15,15 @@ impl SheetApp {
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
+        // A locked cell on a protected sheet refuses the edit up front, as Excel does (#2945):
+        // letting the draft open and fail on commit left the user stuck with an open draft.
+        if sh.is_protected()
+            && d.wb.styles.get(sh.style_id(at)).protection.locked
+            && let Some(m) = gridcraft_engine::cmd::locked_cell_error(sh, at, &d.unlocked_ranges)
+        {
+            self.message = Some(("GridCraft".into(), m));
+            return;
+        }
         // A picture has no editable scalar text. Selecting it, F2, or clicking
         // the formula bar must not turn its fallback value into a text edit.
         // Typing still starts an intentional replacement.
