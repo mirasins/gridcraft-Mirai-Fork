@@ -78,6 +78,21 @@ fn window_clamps_at_the_sheet_edges_and_survives_hostile_params() {
 }
 
 #[test]
+fn whole_column_selection_reads_stored_cells_not_every_address() {
+    // Regression: the window visited every address of a whole-column selection widened to the
+    // sheet's edges (about a million rows), so one request could stall the app for a long time.
+    let mut s = session();
+    table(&mut s);
+    s.execute("selection.set", json!({"range": "A:A"})).unwrap();
+    let w = s.execute("assistant.formulaContext", json!({"window": 60})).unwrap();
+    assert_eq!(w["from"], "A1");
+    let cells = w["cells"].as_array().unwrap();
+    assert!(cells.iter().any(|c| c["cell"] == json!("A1") && c["text"] == json!("Month")));
+    assert!(cells.iter().any(|c| c["cell"] == json!("B5") && c["text"] == json!("=SUM(B2:B3)")));
+    assert_eq!(cells.len(), 7, "only the stored, non-empty cells are listed");
+}
+
+#[test]
 fn numeric_selection_is_a_valid_context_and_applies() {
     // Regression: a selected numeric cell used to make every apply of its context fail as
     // "changed", because numbers hold no stored text for the length-window check.

@@ -232,9 +232,11 @@ fn sync(app: &mut SheetApp) {
 /// Per-frame work: checks the workbook and collects a finished answer. Call once per frame.
 pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
     sync(app);
-    // The on-sheet preview: Enter applies it and Esc cancels it. Only when no text input is
-    // capturing the keyboard and no send notice is open, so nothing else loses its keys.
-    if app.assistant.proposal.is_some() && app.assistant.worker.is_none() && !app.assistant.show_warning && !ctx.egui_wants_keyboard_input() {
+    // The on-sheet preview: Enter applies it and Esc cancels it. Only while the preview is visible,
+    // no text input is capturing the keyboard, and no dialog, message or send notice is open, so
+    // nothing else loses its keys.
+    let blocked = app.dialog.is_some() || app.message.is_some() || app.assistant.show_warning || app.assistant.worker.is_some();
+    if !blocked && preview_cells(app).is_some() && !ctx.egui_wants_keyboard_input() {
         let enter = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         let escape = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         if enter {
@@ -898,6 +900,12 @@ pub(crate) fn preview_cells(app: &SheetApp) -> Option<PreviewCells<'_>> {
     if owner != proposal.context.owner || revision != proposal.context.revision {
         return None;
     }
+    // Switching sheets changes no revision, so the sheet is checked here: Enter must never apply
+    // a proposal the user cannot see.
+    let sheet = app.session.active()?.wb.active_sheet();
+    if sheet != proposal.preview.sheet_index {
+        return None;
+    }
     Some(PreviewCells { sheet_index: proposal.preview.sheet_index, cells: &proposal.preview.cells })
 }
 
@@ -905,10 +913,7 @@ pub(crate) fn preview_cells(app: &SheetApp) -> Option<PreviewCells<'_>> {
 /// Shown only while the proposal is live for the active workbook, sheet and revision.
 pub(crate) fn preview_banner(app: &mut SheetApp, ui: &Ui, grid_rect: Rect, sheet_index: usize) {
     let Some(proposal) = app.assistant.proposal.as_ref() else { return };
-    if app.assistant.worker.is_some()
-        || sheet_index != proposal.preview.sheet_index
-        || active(app) != Some((proposal.context.owner, proposal.context.revision))
-    {
+    if app.assistant.worker.is_some() || sheet_index != proposal.preview.sheet_index || preview_cells(app).is_none() {
         return;
     }
     let summary = summary_line(proposal);
@@ -921,7 +926,7 @@ pub(crate) fn preview_banner(app: &mut SheetApp, ui: &Ui, grid_rect: Rect, sheet
             egui::Frame::window(ui.style()).show(ui, |ui| {
                 ui.label(RichText::new("Mirai \u{00B7} Apply?").strong());
                 ui.label(RichText::new(&summary).small());
-                ui.label(RichText::new("Enter keeps the changes \u{00B7} Esc reverts").small());
+                ui.label(RichText::new("Enter applies the changes \u{00B7} Esc cancels").small());
                 ui.horizontal(|ui| {
                     if ui.button("Apply").clicked() {
                         action = Some(Action::Apply);
@@ -1446,6 +1451,33 @@ mod tests {
     }
 
     #[test]
+    fn enter_leaves_a_proposal_alone_under_a_message_or_on_another_sheet() {
+        let mut app = app();
+        app.run("home.insertSheet", json!({})).unwrap();
+        app.run("sheet.activate", json!({"sheet": 0})).unwrap();
+        sheet_with_selection(&mut app);
+        propose_for_test(&mut app, response(vec![Suggestion { index: 0, text: "1300".into(), markdown: false }])).unwrap();
+        // A message box has the keyboard: Enter does not apply the proposal beneath it.
+        app.message = Some(("Notice".into(), "Something happened.".into()));
+        let ctx = egui::Context::default();
+        ctx.input_mut(|i| i.events.push(key_event(egui::Key::Enter)));
+        poll(&mut app, &ctx);
+        assert!(app.assistant.proposal.is_some());
+        assert_eq!(app.run("cell.get", json!({"cell": "B2"})).unwrap()["value"].as_f64(), Some(1200.0));
+        app.message = None;
+        // On another sheet the preview is hidden, so Enter must not apply changes the user cannot see.
+        app.run("sheet.activate", json!({"sheet": 1})).unwrap();
+        assert!(preview_cells(&app).is_none());
+        let ctx = egui::Context::default();
+        ctx.input_mut(|i| i.events.push(key_event(egui::Key::Enter)));
+        poll(&mut app, &ctx);
+        assert!(app.assistant.proposal.is_some());
+        app.run("sheet.activate", json!({"sheet": 0})).unwrap();
+        assert!(preview_cells(&app).is_some());
+        assert_eq!(app.run("cell.get", json!({"cell": "B2"})).unwrap()["value"].as_f64(), Some(1200.0));
+    }
+
+    #[test]
     fn stale_preview_hides_and_a_later_edit_survives_cancel() {
         let mut app = app();
         sheet_with_selection(&mut app);
@@ -1484,7 +1516,7 @@ mod tests {
         );
         h.run_steps(6);
         h.get_by_label("Mirai · Apply?");
-        h.get_by_label("Enter keeps the changes · Esc reverts");
+        h.get_by_label("Enter applies the changes · Esc cancels");
         // The summary line itself appears in both the banner and the pane, so it is not
         // asserted here (kittest refuses ambiguous labels); the unit tests cover its content.
         // The chat keeps only the summary.

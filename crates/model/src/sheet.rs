@@ -284,6 +284,11 @@ impl Sheet {
     pub fn input_text(&self, c: CellRef) -> String {
         if self.cell_pictures.contains_key(&c) { String::new() } else { self.cell(c).map(Cell::input_text).unwrap_or_default() }
     }
+    /// Stored cells in `r`, row-major. Visits only cells that exist, so a large range costs what it
+    /// holds, not what it covers.
+    pub fn stored_cells_in(&self, r: RangeRef) -> impl Iterator<Item = (CellRef, &Cell)> + '_ {
+        self.cells.iter_range(r)
+    }
     pub fn set_style(&mut self, c: CellRef, style: StyleId) {
         let mut cell = self.cells.get(c).cloned().unwrap_or_default();
         cell.style = style;

@@ -326,7 +326,7 @@ fn formula_context(s: &mut Session, p: &Json) -> Result<Json> {
     let to = CellRef::new(max_row.saturating_add(window).min(MAX_ROWS - 1), max_col.saturating_add(window).min(MAX_COLS - 1));
     let mut cells = Vec::new();
     let mut bytes = 0usize;
-    for at in RangeRef::new(from, to).iter() {
+    for (at, _) in sh.stored_cells_in(RangeRef::new(from, to)) {
         let text = sh.input_text(at);
         if text.is_empty() || !is_plain(&text) {
             continue;
