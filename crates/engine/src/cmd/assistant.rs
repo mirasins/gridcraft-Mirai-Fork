@@ -636,6 +636,18 @@ fn validate_style_patch(s: &Session, patch: &Json) -> Result<()> {
     Ok(())
 }
 
+/// The columns a column-width entry targets, under any of the keys the model uses.
+fn width_cols(item: &Json) -> Option<&str> {
+    ["cols", "columns", "range", "col"].iter().find_map(|k| item.get(*k)).and_then(Json::as_str)
+}
+
+/// Whether `spec` names rows or columns the way the size commands read them: `B`, `B:D`, `3`,
+/// `2:5`, a comma list (`B:B,D:F`), optionally `Sheet!`-prefixed.
+fn valid_lines(spec: &str) -> bool {
+    let (_, body) = super::split_sheet(spec);
+    body.split(',').all(|part| super::parse_lines(part).is_some())
+}
+
 fn validate_design(s: &Session, design: &Json) -> Result<()> {
     const CMD: &str = "assistant.applyGrid";
     only_keys(
@@ -674,16 +686,13 @@ fn validate_design(s: &Session, design: &Json) -> Result<()> {
             ops += arr.len();
             for item in arr {
                 only_keys(item, &["cols", "columns", "range", "col", "width", "chars"], "a column width")?;
-                let cols = item
-                    .get("cols")
-                    .or_else(|| item.get("columns"))
-                    .or_else(|| item.get("range"))
-                    .and_then(Json::as_str)
-                    .ok_or_else(|| bad(CMD, "missing cols"))?;
+                let cols = width_cols(item).ok_or_else(|| bad(CMD, "missing cols"))?;
                 if cols.len() > MAX_ADDRESS_BYTES {
                     return Err(refuse("cols is too long"));
                 }
-                let _ = RangeRef::parse(cols).ok_or_else(|| bad(CMD, "invalid cols"))?;
+                if !valid_lines(cols) {
+                    return Err(bad(CMD, format!("invalid cols `{cols}`")));
+                }
                 match (item.get("width").and_then(|v| v.as_f64()), item.get("chars").and_then(|v| v.as_f64())) {
                     (Some(w), _) => {
                         if !(0.0..=1800.0).contains(&w) {
@@ -714,7 +723,9 @@ fn validate_design(s: &Session, design: &Json) -> Result<()> {
                 if s.len() > MAX_ADDRESS_BYTES {
                     return Err(refuse("autofit entry is too long"));
                 }
-                let _ = RangeRef::parse(s).ok_or_else(|| bad(CMD, "invalid autofit entry"))?;
+                if !valid_lines(s) {
+                    return Err(bad(CMD, format!("invalid autofit entry `{s}`")));
+                }
             }
         }
     }
@@ -729,7 +740,9 @@ fn validate_design(s: &Session, design: &Json) -> Result<()> {
             if s.len() > MAX_ADDRESS_BYTES {
                 return Err(refuse("autofit row entry is too long"));
             }
-            let _ = RangeRef::parse(s).ok_or_else(|| bad(CMD, "invalid autofit row entry"))?;
+            if !valid_lines(s) {
+                return Err(bad(CMD, format!("invalid autofit row entry `{s}`")));
+            }
         }
     }
 
@@ -745,7 +758,9 @@ fn validate_design(s: &Session, design: &Json) -> Result<()> {
             if rows.len() > MAX_ADDRESS_BYTES {
                 return Err(refuse("rows is too long"));
             }
-            let _ = RangeRef::parse(rows).ok_or_else(|| bad(CMD, "invalid rows"))?;
+            if !valid_lines(rows) {
+                return Err(bad(CMD, format!("invalid rows `{rows}`")));
+            }
             match (item.get("height").and_then(|v| v.as_f64()), item.get("points").and_then(|v| v.as_f64())) {
                 (Some(h), _) => {
                     if !(0.0..=546.0).contains(&h) {
@@ -811,7 +826,7 @@ fn apply_design_ops(s: &mut Session, sheet: usize, design: &Json) -> Result<()> 
     for key in ["columnWidths", "columns", "widths"] {
         if let Some(arr) = design.get(key).and_then(Json::as_array) {
             for item in arr {
-                let cols = item.get("cols").or_else(|| item.get("columns")).or_else(|| item.get("range")).and_then(Json::as_str).unwrap_or("");
+                let cols = width_cols(item).unwrap_or("");
                 let mut p = json!({"sheet": sheet, "cols": cols});
                 if let Some(w) = item.get("width").and_then(|v| v.as_f64()) {
                     p["width"] = json!(w);

@@ -105,3 +105,30 @@ fn an_unrecognised_colour_is_refused_without_changes() {
     let a1 = s.execute("cell.get", json!({"cell": "A1"})).unwrap();
     assert_eq!(a1["style"]["font"]["color"], json!("Auto"));
 }
+
+#[test]
+fn bare_and_listed_columns_and_rows_are_accepted() {
+    let mut s = session();
+    let context = s.execute("assistant.context", json!({})).unwrap();
+    let design = json!({
+        "columnWidths": [{"cols": "B", "width": 120.0}, {"col": "D", "width": 80.0}, {"cols": "F:F,H", "chars": 10.0}],
+        "autofitColumns": ["C"],
+        "autofitRows": ["2"],
+        "rowHeights": [{"rows": "3", "points": 20.0}]
+    });
+    s.execute("assistant.applyGrid", json!({"context": context, "design": design})).unwrap();
+    let doc = s.doc().unwrap();
+    let sheet = doc.wb.active().unwrap();
+    let width = |c: u32| sheet.cols.get(&c).and_then(|e| e.size);
+    assert_eq!(width(1), Some(120.0));
+    assert_eq!(width(3), Some(80.0));
+    assert!(width(5).is_some() && width(7).is_some());
+}
+
+#[test]
+fn a_malformed_column_spec_is_refused() {
+    let mut s = session();
+    let context = s.execute("assistant.context", json!({})).unwrap();
+    let invalid = json!({"columnWidths": [{"cols": "B:2", "width": 50.0}]});
+    assert!(s.execute("assistant.applyGrid", json!({"context": context, "design": invalid})).is_err());
+}
