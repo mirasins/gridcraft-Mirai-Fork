@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use gridcraft_core::{CellRef, RangeRef, Value};
+use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::Sheet;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
@@ -19,6 +19,12 @@ pub const MAX_CELLS: usize = 256;
 pub const MAX_TEXT_BYTES: usize = 64 * 1024;
 /// Most style, width, height, autofit or table operations in one design apply.
 pub const MAX_DESIGN_OPS: usize = 64;
+/// Most rows and columns each side of the selection that a formula context reads.
+pub const MAX_FORMULA_WINDOW: u32 = 60;
+/// Default rows and columns each side of the selection that a formula context reads.
+const DEFAULT_FORMULA_WINDOW: u32 = 15;
+/// Most bytes of cell text one formula context holds.
+pub const MAX_FORMULA_WINDOW_BYTES: usize = 32 * 1024;
 /// Longest cell address or label a snapshot may carry back.
 const MAX_ADDRESS_BYTES: usize = 64;
 const MAX_SCOPE_BYTES: usize = 16;
@@ -70,6 +76,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{context: snapshot, design: {styles?: [{range, style}], columnWidths?: [{cols, width?|chars?}], autofitColumns?: [cols], autofitRows?: [rows], rowHeights?: [{rows, height?|points?}], table?: {range, name?, style?, header?}}}; one undo step",
             has_doc,
             apply_design
+        ),
+        cmd!(
+            query "assistant.formulaContext",
+            "Mirai Assistant Formula Context",
+            [],
+            None,
+            "{window?: rows and columns each side of the selection (default 15, at most 60)} → {document_id, revision, sheet, sheet_name, selection, from, to, cells: [{cell, text}]}; formulas as typed, at most 32 KiB",
+            has_doc,
+            formula_context
         ),
     ]
 }
@@ -275,6 +290,71 @@ fn snapshot(s: &Session) -> Result<Snapshot> {
     Ok(Snapshot { document_id: d.uid, revision: d.revision, scope: "selection".into(), sheet: si, sheet_name: sh.name.clone(), targets })
 }
 
+/// A bounded, read-only window of sheet cells around the selection: what formula work may look at.
+/// Nothing is edited and nothing here is checked back by an apply; the plain selection snapshot
+/// stays the authority for changes. The rectangle is bounded by `window` and the sheet limits, and
+/// the text is capped before it is copied.
+fn formula_context(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "assistant.formulaContext";
+    let window = match p.get("window") {
+        None | Some(Json::Null) => DEFAULT_FORMULA_WINDOW,
+        Some(v) => {
+            let n = v.as_u64().ok_or_else(|| bad(CMD, "`window` must be a whole number"))?;
+            u32::try_from(n).map_err(|_| bad(CMD, format!("`window` must be at most {MAX_FORMULA_WINDOW}")))?
+        }
+    };
+    if window > MAX_FORMULA_WINDOW {
+        return Err(bad(CMD, format!("`window` must be at most {MAX_FORMULA_WINDOW}")));
+    }
+    let d = s.doc()?;
+    let si = d.wb.active_sheet();
+    let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
+    if sh.is_protected() {
+        return Err(refuse(PROTECTED));
+    }
+    if d.selection.ranges.is_empty() {
+        return Err(bad(CMD, "nothing is selected; select a cell first"));
+    }
+    let (mut min_row, mut min_col, mut max_row, mut max_col) = (u32::MAX, u32::MAX, 0u32, 0u32);
+    for r in &d.selection.ranges {
+        min_row = min_row.min(r.start.row);
+        min_col = min_col.min(r.start.col);
+        max_row = max_row.max(r.end.row);
+        max_col = max_col.max(r.end.col);
+    }
+    let from = CellRef::new(min_row.saturating_sub(window), min_col.saturating_sub(window));
+    let to = CellRef::new(max_row.saturating_add(window).min(MAX_ROWS - 1), max_col.saturating_add(window).min(MAX_COLS - 1));
+    let mut cells = Vec::new();
+    let mut bytes = 0usize;
+    for at in RangeRef::new(from, to).iter() {
+        let text = sh.input_text(at);
+        if text.is_empty() || !is_plain(&text) {
+            continue;
+        }
+        bytes = bytes.saturating_add(text.len());
+        if bytes > MAX_FORMULA_WINDOW_BYTES {
+            return Err(refuse(format!("the surrounding cells hold more than {MAX_FORMULA_WINDOW_BYTES} bytes; select a smaller window")));
+        }
+        cells.push(json!({"cell": at.a1(), "text": text}));
+    }
+    let selection = format!("{}:{}", CellRef::new(min_row, min_col).a1(), CellRef::new(max_row, max_col).a1());
+    Ok(json!({
+        "document_id": d.uid,
+        "revision": d.revision,
+        "sheet": si,
+        "sheet_name": sh.name,
+        "selection": selection,
+        "from": from.a1(),
+        "to": to.a1(),
+        "cells": cells,
+    }))
+}
+
+/// Sheet text a formula context may carry: no control characters and no object replacement.
+fn is_plain(text: &str) -> bool {
+    text.chars().all(|c| matches!(c, '\n' | '\r' | '\t') || (!c.is_control() && c != '\u{FFFC}'))
+}
+
 /// Refuses cells the assistant can't rewrite as plain text without changing what they are.
 fn check_plain(sh: &Sheet, at: CellRef) -> Result<()> {
     let why = if sh.cell(at).is_some_and(|c| c.formula.is_some()) {
@@ -436,8 +516,10 @@ fn verify(s: &Session, snap: &Snapshot) -> Result<()> {
         check_plain(sh, at)?;
         // Input text is the stored text or that plus one apostrophe, so a length outside that
         // window can't match the original; refuse without copying the cell.
+        // The length window refuses a changed long text without copying it. Numbers, booleans
+        // and errors hold no stored text; their input text is short, so compare it directly.
         let stored = stored_text_len(sh, at);
-        if t.original.len() < stored || t.original.len() > stored.saturating_add(1) {
+        if stored > 0 && (t.original.len() < stored || t.original.len() > stored.saturating_add(1)) {
             return Err(refuse(format!("{} changed since the assistant read it; ask again", t.cell)));
         }
         if sh.input_text(at) != t.original {

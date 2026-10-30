@@ -41,7 +41,7 @@ pub const COMMANDS: [(&str, &str, &str); 7] = [
     (
         "ui.assistant.request",
         "Mirai Assistant: Send Request",
-        "{instruction?: text, model?: text, confirm: true} → {sent}; refused without confirm: true, sends the selected cells' text to Claude Code",
+        "{instruction?: text, model?: text, window?: bool (send the cells around the selection too), confirm: true} → {sent}; refused without confirm: true, sends the selected cells' text to Claude Code",
     ),
     (
         "ui.assistant.apply",
@@ -107,6 +107,8 @@ pub struct State {
     pub open: bool,
     pub instruction: String,
     pub model: String,
+    /// Send a bounded window of cells around the selection too, for formula work.
+    pub window: bool,
     /// Send notice visibility (the first Enter or Send press opens it).
     pub show_warning: bool,
     /// Fingerprint of the workbook, selection, model and instruction the open notice was shown for.
@@ -425,6 +427,26 @@ fn parse_context(raw: &Json, owner: u64, revision: u64) -> Result<Context, Strin
     Ok(Context { owner, revision, json: raw.clone(), targets })
 }
 
+/// The formula window as one bounded string: sheet, selection and `address=content` entries,
+/// formulas as typed. The engine has already capped the cells and text.
+fn window_text(app: &mut SheetApp) -> Result<String, String> {
+    let w = app.run("assistant.formulaContext", json!({}))?;
+    let sheet = w.get("sheet_name").and_then(Json::as_str).unwrap_or_default();
+    let selection = w.get("selection").and_then(Json::as_str).unwrap_or_default();
+    let mut out = format!("Sheet \"{sheet}\", selection {selection}. Surrounding cells (address=content, formulas as typed): ");
+    let empty = Vec::new();
+    for cell in w.get("cells").and_then(Json::as_array).unwrap_or(&empty) {
+        let at = cell.get("cell").and_then(Json::as_str).ok_or("The formula context is malformed.")?;
+        let content = cell.get("text").and_then(Json::as_str).ok_or("The formula context is malformed.")?;
+        let entry = format!("{at}={content}; ");
+        if out.len().saturating_add(entry.len()) > MAX_TEXT_BYTES {
+            return Err("The cells around the selection are too much text; select a smaller area.".into());
+        }
+        out.push_str(&entry);
+    }
+    Ok(out)
+}
+
 /// Fingerprint of everything the user agrees to send: workbook, selection snapshot, model and
 /// instruction. Fails when the selection cannot be sent at all.
 fn consent_key(app: &mut SheetApp) -> Result<u64, String> {
@@ -438,6 +460,7 @@ fn consent_key(app: &mut SheetApp) -> Result<u64, String> {
     raw.to_string().hash(&mut hasher);
     app.assistant.instruction.hash(&mut hasher);
     app.assistant.model.hash(&mut hasher);
+    app.assistant.window.hash(&mut hasher);
     Ok(hasher.finish())
 }
 
@@ -476,7 +499,7 @@ fn confirm_send(app: &mut SheetApp) {
     let bound = app.assistant.consent_key.take();
     app.assistant.show_warning = false;
     let result = match (bound, consent_key(app)) {
-        (Some(bound), Ok(now)) if bound == now => request(app, None, None, true).map(|_| ()),
+        (Some(bound), Ok(now)) if bound == now => request(app, None, None, None, true).map(|_| ()),
         (_, Err(error)) => Err(error),
         _ => Err("The selection, model or instruction changed after the notice, so nothing was sent. Review it and send again.".into()),
     };
@@ -487,7 +510,7 @@ fn confirm_send(app: &mut SheetApp) {
 
 /// Sends one request. Refused unless `confirmed` (the send notice, or `confirm: true` from a
 /// program) — checked before anything is read or started.
-fn request(app: &mut SheetApp, instruction: Option<&str>, model: Option<&str>, confirmed: bool) -> Result<Json, String> {
+fn request(app: &mut SheetApp, instruction: Option<&str>, model: Option<&str>, window: Option<bool>, confirmed: bool) -> Result<Json, String> {
     if !confirmed {
         return Err("Confirm first: the selected cells' text is sent to Claude Code. Review the notice or pass confirm: true.".into());
     }
@@ -513,11 +536,15 @@ fn request(app: &mut SheetApp, instruction: Option<&str>, model: Option<&str>, c
     let (owner, revision) = active(app).ok_or("Open a workbook first.")?;
     let raw = app.run("assistant.context", json!({}))?;
     let context = parse_context(&raw, owner, revision)?;
+    let include_window = window.unwrap_or(app.assistant.window);
     let request = Request {
         instruction: text.clone(),
         targets: context.targets.iter().map(|t| t.original.clone()).collect(),
         structure: context.targets.iter().map(|t| t.label.clone()).collect(),
-        context: None,
+        context: match include_window {
+            true => Some(window_text(app)?),
+            false => None,
+        },
     };
     request.validate().map_err(|e| e.to_string())?;
     app.assistant.model = model.clone();
@@ -640,7 +667,13 @@ pub fn command(app: &mut SheetApp, id: &str, p: &Json) -> Result<Json, String> {
         }
         "ui.assistant.request" => {
             let confirmed = p.get("confirm").and_then(Json::as_bool).unwrap_or(false);
-            request(app, p.get("instruction").and_then(Json::as_str), p.get("model").and_then(Json::as_str), confirmed)
+            request(
+                app,
+                p.get("instruction").and_then(Json::as_str),
+                p.get("model").and_then(Json::as_str),
+                p.get("window").and_then(Json::as_bool),
+                confirmed,
+            )
         }
         "ui.assistant.apply" => apply(app),
         "ui.assistant.dismiss" => {
@@ -815,6 +848,7 @@ fn composer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     app.assistant.instruction_focus = instruction.has_focus();
     clamp_text(&mut app.assistant.instruction, MAX_INSTRUCTION_BYTES);
     clamp_text(&mut app.assistant.model, MAX_MODEL_BYTES);
+    ui.checkbox(&mut app.assistant.window, "Include the cells around the selection (formula work)");
 
     // Enter opens the notice; a second Enter (or Send inside the notice) confirms.
     let mut confirm = enter && notice_open;
@@ -823,6 +857,9 @@ fn composer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     if notice_open {
         egui::Window::new("Send to Claude Code?").collapsible(false).resizable(false).default_pos(egui::pos2(100.0, 100.0)).show(ui.ctx(), |ui| {
             ui.label("The selected cells' text and your instruction will be sent to Claude Code, using your own sign-in.");
+            if app.assistant.window {
+                ui.label("The cells around the selection on this sheet (up to 60 rows and columns away) are sent too, for formula work.");
+            }
             ui.label("Suggested changes are shown first and change nothing until you choose Apply all. They can overwrite cells on the current sheet or create a new sheet.");
             ui.label(RichText::new("Enter sends · Shift+Enter new line · Esc cancels").small().color(t.text_dim));
             ui.horizontal(|ui| {
@@ -944,6 +981,27 @@ mod tests {
     }
 
     #[test]
+    fn formula_window_lists_the_cells_around_the_selection() {
+        let mut app = app();
+        let context = app.run("assistant.context", json!({})).unwrap();
+        app.run(
+            "assistant.applyGrid",
+            json!({"context": context, "grid": json!({"sheet_name": null, "cells": [
+                {"cell": "A1", "input": "Month"},
+                {"cell": "B1", "input": "Sales"},
+                {"cell": "B2", "input": "1200"}
+            ]})}),
+        )
+        .unwrap();
+        app.run("selection.set", json!({"range": "B2"})).unwrap();
+        let text = window_text(&mut app).unwrap();
+        assert!(text.contains("Sheet \"Sheet1\", selection B2:B2"), "window text: {text}");
+        assert!(text.contains("A1=Month;"));
+        assert!(text.contains("B1=Sales;"));
+        assert!(text.contains("B2=1200;"));
+    }
+
+    #[test]
     fn send_without_confirmation_refuses_before_spawn() {
         let mut app = app();
         let r = app.run("ui.assistant.request", json!({"instruction": "Shorten", "confirm": false}));
@@ -957,7 +1015,7 @@ mod tests {
     fn oversized_instruction_refused_before_spawn() {
         let mut app = app();
         let long = "x".repeat(MAX_INSTRUCTION_BYTES + 1);
-        assert!(request(&mut app, Some(&long), None, true).is_err());
+        assert!(request(&mut app, Some(&long), None, None, true).is_err());
         assert!(app.assistant.worker.is_none());
     }
 
@@ -971,7 +1029,7 @@ mod tests {
             ("short".to_string(), "x".repeat(MAX_MODEL_BYTES + 1)),
             (format!("{}x", " ".repeat(MAX_INSTRUCTION_BYTES)), "valid-model".to_string()),
         ] {
-            assert!(request(&mut app, Some(&instruction), Some(&model), true).is_err());
+            assert!(request(&mut app, Some(&instruction), Some(&model), None, true).is_err());
             assert!(app.assistant.worker.is_none());
             assert_eq!(app.assistant.instruction, "draft");
             assert_eq!(app.assistant.model, "valid-model");

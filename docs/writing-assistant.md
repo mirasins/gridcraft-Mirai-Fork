@@ -6,7 +6,9 @@ Mirai is a right-hand panel in **Review › Mirai Assistant**. It proposes three
 literal text replacements for selected ordinary cells, spreadsheet changes (cell inputs at absolute
 addresses, plain values or formulas starting with `=`), and typed sheet-design operations (cell styles,
 column widths or AutoFit, row heights, and Excel tables), plus an explicitly requested new sheet.
-It does not analyze a whole workbook, create charts, or execute commands produced by the model.
+It does not analyze a whole workbook, create charts, or execute commands produced by the model. For formula
+work, an optional bounded window of cells around the selection (default 15, at most 60 rows and columns away, at
+most 32 KiB of text, formulas as typed) can be sent too, after the same confirmation.
 
 ## Use
 
@@ -14,7 +16,8 @@ It does not analyze a whole workbook, create charts, or execute commands produce
 2. Open **Review › Mirai Assistant**.
 3. Write an instruction. Enter or Send shows a notice of what is sent and where changes may apply;
    Enter or Send again confirms. Shift+Enter inserts a line. Confirmation is required for every
-   request and is never persisted as a blanket permission.
+   request and is never persisted as a blanket permission. A checkbox sends the cells around the
+   selection too, for formula work; the notice says so when it is on.
 4. Review the preview before applying. Text proposals show original and proposed text. Spreadsheet
    proposals list each cell address and its new input, with the destination sheet. A proposal may
    change cells outside the selection; the preview warns that existing cells may be overwritten.
@@ -23,7 +26,7 @@ It does not analyze a whole workbook, create charts, or execute commands produce
    taken; ask again for a new proposal.
 6. Cancel or New Conversation stops the request. Changing workbooks clears the panel's local state.
 
-The engine commands `assistant.context`, `assistant.apply` (text) and `assistant.applyGrid`
+The engine commands `assistant.context`, `assistant.apply` (text), `assistant.applyGrid` and `assistant.formulaContext`
 (spreadsheet and design changes) implement the bounded snapshot and validated apply. Text output is always
 literal: leading `=`, `+`, `-` and `@` are refused, and replacing a numeric/date cell changes it to
 text, as the preview indicates. Spreadsheet proposals are limited to 256 cells and 64 KiB of addresses
@@ -52,6 +55,7 @@ all new tests use fake local fixtures/processes.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | Formula work: an optional bounded window of cells around the selection (default 15, at most 60 rows and columns away, 32 KiB, formulas as typed) is sent after the same confirmation; new `assistant.formulaContext` engine command, pane checkbox and notice line. Fixed contexts over selected numeric cells failing every apply as changed. Offline tests only. |
 | 2026-10-29 | minor | Added the original Mirai logo, two-step Enter confirmation, and atomic mixed text and cell proposals; no live-account or real-IME check. |
 | 2026-10-29 | minor | Spreadsheet change proposals (cell inputs, explicit new sheet), previewed and applied as one undo step; 256-cell limit; stale proposals rejected; overwrite warning. |
 | 2026-10-29 | minor | Added typed sheet-design proposals (cell styles, column widths/AutoFit, row heights, tables) to `assistant.applyGrid`/`assistant.applyDesign`, with preview, validation, atomicity and undo. |
