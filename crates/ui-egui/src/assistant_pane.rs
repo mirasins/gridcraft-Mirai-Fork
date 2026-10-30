@@ -97,6 +97,7 @@ struct Proposal {
     rows: Vec<Row>,
     changes: Vec<Json>,
     grid: Option<Json>,
+    design: Option<Json>,
     explanation: String,
 }
 
@@ -307,7 +308,80 @@ fn build_proposal(context: Context, response: Response) -> Result<Proposal, Stri
     } else {
         None
     };
-    Ok(Proposal { context, rows, changes, grid, explanation: response.explanation })
+    let design = response.design.clone();
+    if let Some(design) = &design {
+        let destination = context.json.get("sheet_name").and_then(Json::as_str).unwrap_or("original sheet");
+        if let Some(styles) = design.get("styles").and_then(Json::as_array) {
+            for item in styles {
+                let range = item.get("range").and_then(Json::as_str).unwrap_or("?");
+                let style = item.get("style").map(|v| v.to_string()).unwrap_or_default();
+                rows.push(Row { label: format!("Sheet: {destination} — style {range}"), original: "Current style".into(), proposed: style });
+            }
+        }
+        for key in ["columnWidths", "columns", "widths"] {
+            if let Some(arr) = design.get(key).and_then(Json::as_array) {
+                for item in arr {
+                    let cols = item.get("cols").or_else(|| item.get("columns")).or_else(|| item.get("range")).and_then(Json::as_str).unwrap_or("?");
+                    let proposed = if let Some(w) = item.get("width").and_then(Json::as_f64) {
+                        format!("width {w} px")
+                    } else if let Some(c) = item.get("chars").and_then(Json::as_f64) {
+                        format!("width {c} chars")
+                    } else {
+                        "width".into()
+                    };
+                    rows.push(Row { label: format!("Sheet: {destination} — columns {cols}"), original: "Current width".into(), proposed });
+                }
+            }
+        }
+        for key in ["autofitColumns", "autofit"] {
+            if let Some(arr) = design.get(key).and_then(Json::as_array) {
+                for item in arr {
+                    let cols = item.as_str().unwrap_or("?");
+                    rows.push(Row {
+                        label: format!("Sheet: {destination} — autofit columns {cols}"),
+                        original: "Current width".into(),
+                        proposed: "AutoFit".into(),
+                    });
+                }
+            }
+        }
+        if let Some(arr) = design.get("autofitRows").and_then(Json::as_array) {
+            for item in arr {
+                let rows_spec = item.as_str().unwrap_or("?");
+                rows.push(Row {
+                    label: format!("Sheet: {destination} — autofit rows {rows_spec}"),
+                    original: "Current height".into(),
+                    proposed: "AutoFit".into(),
+                });
+            }
+        }
+        if let Some(arr) = design.get("rowHeights").and_then(Json::as_array) {
+            for item in arr {
+                let rows_spec = item.get("rows").or_else(|| item.get("row")).and_then(Json::as_str).unwrap_or("?");
+                let proposed = if let Some(h) = item.get("height").and_then(Json::as_f64) {
+                    format!("height {h} px")
+                } else if let Some(pt) = item.get("points").and_then(Json::as_f64) {
+                    format!("height {pt} pt")
+                } else {
+                    "height".into()
+                };
+                rows.push(Row { label: format!("Sheet: {destination} — rows {rows_spec}"), original: "Current height".into(), proposed });
+            }
+        }
+        let table_items: Vec<&Json> = if let Some(t) = design.get("table") {
+            vec![t]
+        } else if let Some(arr) = design.get("tables").and_then(Json::as_array) {
+            arr.iter().collect()
+        } else {
+            vec![]
+        };
+        for item in table_items {
+            let range = item.get("range").and_then(Json::as_str).unwrap_or("?");
+            let name = item.get("name").and_then(Json::as_str).unwrap_or("Table");
+            rows.push(Row { label: format!("Sheet: {destination} — table {range}"), original: "No table".into(), proposed: name.into() });
+        }
+    }
+    Ok(Proposal { context, rows, changes, grid, design, explanation: response.explanation })
 }
 
 /// The sign-in guidance for a failed request. It names only official steps; no keys, no fallbacks.
@@ -492,12 +566,39 @@ fn apply(app: &mut SheetApp) -> Result<Json, String> {
         app.assistant.status = Some(note(true, text));
         return Err(text.into());
     }
-    if proposal.changes.is_empty() && proposal.grid.is_none() {
+    if proposal.changes.is_empty() && proposal.grid.is_none() && proposal.design.is_none() {
         return Err("There are no changes to apply.".into());
     }
-    let count = proposal.changes.len() + proposal.grid.as_ref().and_then(|g| g.get("cells")).and_then(Json::as_array).map_or(0, Vec::len);
-    let (command, params) = if let Some(grid) = proposal.grid {
-        ("assistant.applyGrid", json!({"context": proposal.context.json, "grid": grid, "changes": proposal.changes}))
+    let grid_cells = proposal.grid.as_ref().and_then(|g| g.get("cells")).and_then(Json::as_array).map_or(0, Vec::len);
+    let design_ops = proposal.design.as_ref().map_or(0, |d| {
+        // Count a few known operation arrays for the status message.
+        let mut n = 0;
+        if let Some(v) = d.get("styles").and_then(Json::as_array) {
+            n += v.len();
+        }
+        if let Some(v) = d.get("columnWidths").and_then(Json::as_array) {
+            n += v.len();
+        }
+        if let Some(v) = d.get("autofitColumns").and_then(Json::as_array) {
+            n += v.len();
+        }
+        if let Some(v) = d.get("autofitRows").and_then(Json::as_array) {
+            n += v.len();
+        }
+        if let Some(v) = d.get("rowHeights").and_then(Json::as_array) {
+            n += v.len();
+        }
+        if d.get("table").is_some() {
+            n += 1;
+        }
+        n
+    });
+    let count = proposal.changes.len() + grid_cells + design_ops;
+    let (command, params) = if proposal.grid.is_some() || proposal.design.is_some() {
+        (
+            "assistant.applyGrid",
+            json!({"context": proposal.context.json, "grid": proposal.grid, "design": proposal.design, "changes": proposal.changes}),
+        )
     } else {
         ("assistant.apply", json!({"context": proposal.context.json, "changes": proposal.changes}))
     };
@@ -822,7 +923,7 @@ mod tests {
     }
 
     fn response(suggestions: Vec<Suggestion>) -> Response {
-        Response { suggestions, explanation: "Shorter.".into(), grid: None }
+        Response { suggestions, explanation: "Shorter.".into(), grid: None, design: None }
     }
 
     fn running(app: &mut SheetApp) -> Arc<AtomicBool> {
@@ -934,6 +1035,7 @@ mod tests {
                     gridcraft_assistant::GridCell { cell: "B1".into(), input: "Amount".into() },
                 ],
             }),
+            design: None,
         };
         let proposal = build_proposal(ctx, answer).unwrap();
         assert_eq!(proposal.rows.len(), 2);
@@ -963,6 +1065,7 @@ mod tests {
                 sheet_name: None,
                 cells: vec![gridcraft_assistant::GridCell { cell: "B1".into(), input: "42".into() }],
             }),
+            design: None,
         };
         let proposal = build_proposal(ctx, answer).unwrap();
         assert_eq!(proposal.rows.len(), 2);

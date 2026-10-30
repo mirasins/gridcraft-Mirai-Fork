@@ -171,10 +171,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 22. AI features (F)
 - Mirai offers reviewed proposals for selected cells through the official Claude Code CLI, with
   per-request consent and one-step undo. Only the selection is sent. Proposals can be plain text
-  rewrites, or cell inputs (values and `=` formulas, up to 256 cells) and an explicitly requested new
-  sheet, shown in a preview that warns about overwrites. Natural-language formula generation,
-  workbook analysis, charts and broader formula assistance remain missing; agent control via MCP is
-  already strong. **Remaining estimate:** 25–45 h; see [writing-assistant.md](writing-assistant.md).
+  rewrites, cell inputs (values and `=` formulas, up to 256 cells), typed sheet-design operations
+  (cell styles, column widths or AutoFit, row heights, Excel tables, up to 64 operations) and an
+  explicitly requested new sheet, shown in a preview that warns about overwrites. Natural-language
+  formula generation, workbook analysis, charts and broader formula assistance remain missing; agent
+  control via MCP is already strong. **Remaining estimate:** 20-40 h; see [writing-assistant.md](writing-assistant.md).
 
 ### 23. Mobile (platform)
 - No iOS, iPadOS or Android layout. **Estimate:** 30–60 h.

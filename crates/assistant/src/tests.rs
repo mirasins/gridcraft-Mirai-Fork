@@ -390,9 +390,10 @@ fn grid_proposal_parses_and_stays_compatible() {
     let parsed = parse_response(&new_sheet, 0);
     assert_eq!(parsed.as_ref().ok().and_then(|r| r.grid.as_ref()).and_then(|g| g.sheet_name.clone()), Some("Ventas 2026".to_owned()));
 
-    let serialized = serde_json::to_string(&crate::Response { suggestions: vec![], explanation: "e".into(), grid: None }).unwrap_or_default();
+    let serialized =
+        serde_json::to_string(&crate::Response { suggestions: vec![], explanation: "e".into(), grid: None, design: None }).unwrap_or_default();
     assert!(!serialized.contains("grid"));
-    assert!(crate::protocol::OUTPUT_SCHEMA.contains(r#""required":["suggestions","explanation","grid"]"#));
+    assert!(crate::protocol::OUTPUT_SCHEMA.contains(r#""required":["suggestions","explanation","grid","design"]"#));
 }
 
 #[test]
@@ -465,7 +466,8 @@ fn grid_proposal_debug_hides_text() {
 #[test]
 fn response_debug_hides_text() {
     let parsed = parse_response(&success(r#"{"suggestions":[{"index":0,"text":"secret words"}],"explanation":"e"}"#), 1);
-    let debug = format!("{:?}", parsed.unwrap_or_else(|_| crate::Response { suggestions: vec![], explanation: String::new(), grid: None }));
+    let debug =
+        format!("{:?}", parsed.unwrap_or_else(|_| crate::Response { suggestions: vec![], explanation: String::new(), grid: None, design: None }));
     assert!(!debug.contains("secret words"));
 }
 

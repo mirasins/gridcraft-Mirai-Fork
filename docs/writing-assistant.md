@@ -2,10 +2,11 @@
 
 > **Last reviewed:** 2026-10-29 · **Last updated:** 2026-10-29 · **Change:** minor (original Mirai logo, two-step Enter confirmation and combined spreadsheet proposals) · **Validation:** offline transport, engine and panel tests; no live-account request.
 
-Mirai is a right-hand panel in **Review › Mirai Assistant**. It proposes two kinds of changes:
-literal text replacements for selected ordinary cells, and spreadsheet changes: cell inputs at absolute
-addresses (plain values or formulas starting with `=`) and, only when you explicitly ask for it, a new
-sheet. It does not analyze a whole workbook, create charts, or execute commands produced by the model.
+Mirai is a right-hand panel in **Review › Mirai Assistant**. It proposes three kinds of changes:
+literal text replacements for selected ordinary cells, spreadsheet changes (cell inputs at absolute
+addresses, plain values or formulas starting with `=`), and typed sheet-design operations (cell styles,
+column widths or AutoFit, row heights, and Excel tables), plus an explicitly requested new sheet.
+It does not analyze a whole workbook, create charts, or execute commands produced by the model.
 
 ## Use
 
@@ -23,11 +24,13 @@ sheet. It does not analyze a whole workbook, create charts, or execute commands 
 6. Cancel or New Conversation stops the request. Changing workbooks clears the panel's local state.
 
 The engine commands `assistant.context`, `assistant.apply` (text) and `assistant.applyGrid`
-(spreadsheet changes) implement the bounded snapshot and validated apply. Text output is always
+(spreadsheet and design changes) implement the bounded snapshot and validated apply. Text output is always
 literal: leading `=`, `+`, `-` and `@` are refused, and replacing a numeric/date cell changes it to
 text, as the preview indicates. Spreadsheet proposals are limited to 256 cells and 64 KiB of addresses
 and inputs; addresses must be absolute A1 (for example `B12`), duplicates are refused, and a new sheet
-name is checked before anything changes. Selected formula, merged, picture and spilled cells and
+name is checked before anything changes. Design proposals are limited to 64 operations: cell-style patches,
+column widths or AutoFit, row heights, and at most one table per proposal; style patches are validated
+against the active cell style. Selected formula, merged, picture and spilled cells and
 protected sheets are refused as context. Grid changes can write formulas but refuse merged, picture
 and spilled cells. Programmatic requests still require `confirm: true`; no cloud
 request happens on opening the panel.
@@ -51,4 +54,5 @@ all new tests use fake local fixtures/processes.
 |---|---|---|
 | 2026-10-29 | minor | Added the original Mirai logo, two-step Enter confirmation, and atomic mixed text and cell proposals; no live-account or real-IME check. |
 | 2026-10-29 | minor | Spreadsheet change proposals (cell inputs, explicit new sheet), previewed and applied as one undo step; 256-cell limit; stale proposals rejected; overwrite warning. |
+| 2026-10-29 | minor | Added typed sheet-design proposals (cell styles, column widths/AutoFit, row heights, tables) to `assistant.applyGrid`/`assistant.applyDesign`, with preview, validation, atomicity and undo. |
 | 2026-10-26 | minor | First selected-cell Mirai panel, standalone official-Claude transport, revision-checked literal apply and offline tests. |

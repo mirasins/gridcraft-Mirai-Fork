@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use gridcraft_core::{CellRef, Value};
+use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::Sheet;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
@@ -17,6 +17,8 @@ use crate::{EngineError, Result, Session};
 pub const MAX_CELLS: usize = 256;
 /// Most bytes of cell text in one snapshot (the originals) and in one apply (the new text).
 pub const MAX_TEXT_BYTES: usize = 64 * 1024;
+/// Most style, width, height, autofit or table operations in one design apply.
+pub const MAX_DESIGN_OPS: usize = 64;
 /// Longest cell address or label a snapshot may carry back.
 const MAX_ADDRESS_BYTES: usize = 64;
 const MAX_SCOPE_BYTES: usize = 16;
@@ -56,9 +58,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Apply Mirai Spreadsheet Changes",
             [],
             None,
-            "{context: snapshot, grid: {sheet_name: string|null, cells: [{cell, input}]}}; optional new sheet, one undo step",
+            "{context: snapshot, grid?: {sheet_name: string|null, cells: [{cell, input}]}, design?: {styles?, columnWidths?, autofitColumns?, autofitRows?, rowHeights?, table?}}; optional new sheet, one undo step",
             has_doc,
             apply_grid
+        ),
+        cmd!(
+            "assistant.applyDesign",
+            "Apply Mirai Design Changes",
+            [],
+            None,
+            "{context: snapshot, design: {styles?: [{range, style}], columnWidths?: [{cols, width?|chars?}], autofitColumns?: [cols], autofitRows?: [rows], rowHeights?: [{rows, height?|points?}], table?: {range, name?, style?, header?}}}; one undo step",
+            has_doc,
+            apply_design
         ),
     ]
 }
@@ -110,33 +121,39 @@ struct GridCell {
 fn apply_grid(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "assistant.applyGrid";
     let context = p.get("context").filter(|c| c.is_object()).ok_or_else(|| bad(CMD, "missing context"))?;
-    let grid = p.get("grid").filter(|c| c.is_object()).ok_or_else(|| bad(CMD, "missing grid"))?;
+    let grid = p.get("grid").filter(|c| c.is_object());
+    let design = p.get("design").filter(|c| c.is_object());
     let changes = match p.get("changes") {
         None => &[][..],
         Some(Json::Array(changes)) => changes.as_slice(),
         _ => return Err(bad(CMD, "changes must be an array")),
     };
     check_shape(context, changes)?;
-    only_keys(grid, &["sheet_name", "cells"], "grid")?;
-    let cells = grid.get("cells").and_then(Json::as_array).ok_or_else(|| bad(CMD, "missing cells"))?;
-    if cells.len().saturating_add(changes.len()) > MAX_CELLS {
-        return Err(refuse(format!("the limit is {MAX_CELLS} cells")));
-    }
-    if grid.get("sheet_name").and_then(Json::as_str).is_some_and(|n| n.len() > MAX_SHEET_NAME_BYTES) {
-        return Err(refuse("sheet name is too long"));
-    }
-    let mut bytes = 0usize;
-    for cell in cells {
-        only_keys(cell, &["cell", "input"], "cell")?;
-        str_within(cell, "cell", MAX_ADDRESS_BYTES, "cell address")?;
-        let input = cell.get("input").and_then(Json::as_str).ok_or_else(|| bad(CMD, "missing cell input"))?;
-        bytes = bytes.saturating_add(input.len());
-        if bytes > MAX_TEXT_BYTES || input.chars().any(|c| c == '\u{FFFC}' || (c.is_control() && !matches!(c, '\n' | '\r' | '\t'))) {
-            return Err(refuse("cell input is too large or contains unsupported characters"));
+    if let Some(grid) = grid {
+        only_keys(grid, &["sheet_name", "cells"], "grid")?;
+        let cells = grid.get("cells").and_then(Json::as_array).ok_or_else(|| bad(CMD, "missing cells"))?;
+        if cells.len().saturating_add(changes.len()) > MAX_CELLS {
+            return Err(refuse(format!("the limit is {MAX_CELLS} cells")));
+        }
+        if grid.get("sheet_name").and_then(Json::as_str).is_some_and(|n| n.len() > MAX_SHEET_NAME_BYTES) {
+            return Err(refuse("sheet name is too long"));
+        }
+        let mut bytes = 0usize;
+        for cell in cells {
+            only_keys(cell, &["cell", "input"], "cell")?;
+            str_within(cell, "cell", MAX_ADDRESS_BYTES, "cell address")?;
+            let input = cell.get("input").and_then(Json::as_str).ok_or_else(|| bad(CMD, "missing cell input"))?;
+            bytes = bytes.saturating_add(input.len());
+            if bytes > MAX_TEXT_BYTES || input.chars().any(|c| c == '\u{FFFC}' || (c.is_control() && !matches!(c, '\n' | '\r' | '\t'))) {
+                return Err(refuse("cell input is too large or contains unsupported characters"));
+            }
         }
     }
+    if let Some(design) = design {
+        validate_design(s, design)?;
+    }
     let snap: Snapshot = serde_json::from_value(context.clone()).map_err(|e| bad(CMD, format!("bad context: {e}")))?;
-    let plan: GridPlan = serde_json::from_value(grid.clone()).map_err(|e| bad(CMD, format!("bad grid: {e}")))?;
+    let plan: Option<GridPlan> = grid.map(|g| serde_json::from_value(g.clone()).map_err(|e| bad(CMD, format!("bad grid: {e}")))).transpose()?;
     verify(s, &snap)?;
     let mut seen = BTreeSet::new();
     let mut literal = Vec::with_capacity(changes.len());
@@ -149,43 +166,66 @@ fn apply_grid(s: &mut Session, p: &Json) -> Result<Json> {
         check_text(&change.text)?;
         literal.push((target.cell.clone(), change.text));
     }
-    let mut grid_cells = BTreeSet::new();
-    for cell in &plan.cells {
-        let at = CellRef::parse(&cell.cell).filter(|c| c.is_valid() && c.a1() == cell.cell).ok_or_else(|| bad(CMD, "invalid cell address"))?;
-        if !grid_cells.insert(at) {
-            return Err(bad(CMD, "duplicate cell address"));
-        }
-        if plan.sheet_name.is_none() && seen.contains(&cell.cell) {
-            return Err(bad(CMD, "cell is changed twice"));
-        }
-        if plan.sheet_name.is_none() {
-            let sh = s.doc()?.wb.sheet(snap.sheet).ok_or(EngineError::NoDocument)?;
-            if sh.cell_pictures.contains_key(&at) || sh.merge_at(at).is_some() || sh.spill_anchor(at).is_some() || sh.spill_ranges.contains_key(&at) {
-                return Err(refuse(format!("{} contains an object, merged cell or spilled array", cell.cell)));
+    if let Some(plan) = &plan {
+        let mut grid_cells = BTreeSet::new();
+        for cell in &plan.cells {
+            let at = CellRef::parse(&cell.cell).filter(|c| c.is_valid() && c.a1() == cell.cell).ok_or_else(|| bad(CMD, "invalid cell address"))?;
+            if !grid_cells.insert(at) {
+                return Err(bad(CMD, "duplicate cell address"));
+            }
+            if plan.sheet_name.is_none() && seen.contains(&cell.cell) {
+                return Err(bad(CMD, "cell is changed twice"));
+            }
+            if plan.sheet_name.is_none() {
+                let sh = s.doc()?.wb.sheet(snap.sheet).ok_or(EngineError::NoDocument)?;
+                if sh.cell_pictures.contains_key(&at)
+                    || sh.merge_at(at).is_some()
+                    || sh.spill_anchor(at).is_some()
+                    || sh.spill_ranges.contains_key(&at)
+                {
+                    return Err(refuse(format!("{} contains an object, merged cell or spilled array", cell.cell)));
+                }
             }
         }
+        if let Some(name) = &plan.sheet_name {
+            s.doc()?.wb.check_sheet_name(name, None).map_err(EngineError::Other)?;
+        }
     }
-    if let Some(name) = &plan.sheet_name {
-        s.doc()?.wb.check_sheet_name(name, None).map_err(EngineError::Other)?;
-    }
-    if !plan.cells.is_empty() || plan.sheet_name.is_some() || !literal.is_empty() {
+    let has_ops = !literal.is_empty() || plan.as_ref().is_some_and(|p| !p.cells.is_empty() || p.sheet_name.is_some()) || design.is_some();
+    if has_ops {
+        let design = design.cloned();
         s.grouped(GROUP_LABEL, |s| {
             for (cell, text) in &literal {
                 s.execute("range.setValues", json!({"sheet": snap.sheet, "range": cell, "values": [[text]], "parse": false}))?;
             }
-            let sheet = if let Some(name) = &plan.sheet_name {
-                s.execute("home.insertSheet", json!({"name": name}))?;
-                s.doc()?.wb.active_sheet()
+            let sheet = if let Some(plan) = &plan {
+                if let Some(name) = &plan.sheet_name {
+                    s.execute("home.insertSheet", json!({"name": name}))?;
+                    s.doc()?.wb.active_sheet()
+                } else {
+                    snap.sheet
+                }
             } else {
                 snap.sheet
             };
-            for cell in &plan.cells {
-                s.execute("cell.set", json!({"sheet": sheet, "cell": cell.cell, "input": cell.input}))?;
+            if let Some(plan) = &plan {
+                for cell in &plan.cells {
+                    s.execute("cell.set", json!({"sheet": sheet, "cell": cell.cell, "input": cell.input}))?;
+                }
+            }
+            if let Some(design) = &design {
+                apply_design_ops(s, sheet, design)?;
             }
             Ok(())
         })?;
     }
-    Ok(json!({"applied": plan.cells.len() + literal.len(), "created_sheet": plan.sheet_name}))
+    let created_sheet = plan.as_ref().and_then(|p| p.sheet_name.clone());
+    let applied = literal.len() + plan.as_ref().map_or(0, |p| p.cells.len()) + design_ops_count(design);
+    Ok(json!({"applied": applied, "created_sheet": created_sheet}))
+}
+
+fn apply_design(s: &mut Session, p: &Json) -> Result<Json> {
+    apply_grid(s, p)
 }
 
 fn refuse(msg: impl Into<String>) -> EngineError {
@@ -418,6 +458,315 @@ fn check_text(text: &str) -> Result<()> {
         return Err(refuse("the text starts with =, +, - or @, which would be read as a formula; the assistant writes plain text only"));
     }
     Ok(())
+}
+
+fn snake_case_keys(v: &Json) -> Json {
+    match v {
+        Json::Object(m) => Json::Object(
+            m.iter()
+                .map(|(k, v)| {
+                    let key = if k.starts_with(|c: char| c.is_ascii_lowercase()) {
+                        k.chars().fold(String::new(), |mut out, c| {
+                            if c.is_ascii_uppercase() {
+                                out.push('_');
+                            }
+                            out.push(c.to_ascii_lowercase());
+                            out
+                        })
+                    } else {
+                        k.clone()
+                    };
+                    (key, snake_case_keys(v))
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn validate_style_patch(s: &Session, patch: &Json) -> Result<()> {
+    let base = serde_json::to_value(super::format::active_style(s)?).map_err(|e| EngineError::Other(e.to_string()))?;
+    let merged = super::format::merge_json(base, &snake_case_keys(&patch.clone()));
+    let _: gridcraft_model::Style = serde_json::from_value(merged).map_err(|e| bad("assistant.applyGrid", e.to_string()))?;
+    Ok(())
+}
+
+fn validate_design(s: &Session, design: &Json) -> Result<()> {
+    const CMD: &str = "assistant.applyGrid";
+    only_keys(
+        design,
+        &["styles", "columnWidths", "columns", "widths", "autofitColumns", "autofit", "autofitRows", "rowHeights", "table", "tables"],
+        "design",
+    )?;
+
+    let mut ops = 0usize;
+    if let Some(styles) = design.get("styles") {
+        let arr = styles.as_array().ok_or_else(|| bad(CMD, "styles must be an array"))?;
+        if arr.len() > MAX_DESIGN_OPS {
+            return Err(refuse(format!("{} styles; the limit is {MAX_DESIGN_OPS}", arr.len())));
+        }
+        ops += arr.len();
+        for item in arr {
+            only_keys(item, &["range", "style"], "a style")?;
+            let range = item.get("range").and_then(Json::as_str).ok_or_else(|| bad(CMD, "missing range"))?;
+            if range.len() > MAX_ADDRESS_BYTES {
+                return Err(refuse("range is too long"));
+            }
+            let r = RangeRef::parse(range).ok_or_else(|| bad(CMD, "invalid range"))?;
+            let _ = r;
+            let style = item.get("style").filter(|v| v.is_object()).ok_or_else(|| bad(CMD, "missing style"))?;
+            validate_style_patch(s, style)?;
+        }
+    }
+
+    let width_arrays: [&str; 3] = ["columnWidths", "columns", "widths"];
+    for key in width_arrays {
+        if let Some(v) = design.get(key) {
+            let arr = v.as_array().ok_or_else(|| bad(CMD, "column widths must be an array"))?;
+            if arr.len() > MAX_DESIGN_OPS {
+                return Err(refuse(format!("{} column widths; the limit is {MAX_DESIGN_OPS}", arr.len())));
+            }
+            ops += arr.len();
+            for item in arr {
+                only_keys(item, &["cols", "columns", "range", "col", "width", "chars"], "a column width")?;
+                let cols = item
+                    .get("cols")
+                    .or_else(|| item.get("columns"))
+                    .or_else(|| item.get("range"))
+                    .and_then(Json::as_str)
+                    .ok_or_else(|| bad(CMD, "missing cols"))?;
+                if cols.len() > MAX_ADDRESS_BYTES {
+                    return Err(refuse("cols is too long"));
+                }
+                let _ = RangeRef::parse(cols).ok_or_else(|| bad(CMD, "invalid cols"))?;
+                match (item.get("width").and_then(|v| v.as_f64()), item.get("chars").and_then(|v| v.as_f64())) {
+                    (Some(w), _) => {
+                        if !(0.0..=1800.0).contains(&w) {
+                            return Err(refuse("column width must be between 0 and 1800 pixels"));
+                        }
+                    }
+                    (None, Some(c)) => {
+                        if !(0.0..=255.0).contains(&c) {
+                            return Err(refuse("column width must be between 0 and 255 characters"));
+                        }
+                    }
+                    _ => return Err(bad(CMD, "missing width or chars")),
+                }
+            }
+        }
+    }
+
+    let autofit_keys: [&str; 2] = ["autofitColumns", "autofit"];
+    for key in autofit_keys {
+        if let Some(v) = design.get(key) {
+            let arr = v.as_array().ok_or_else(|| bad(CMD, "autofit columns must be an array"))?;
+            if arr.len() > MAX_DESIGN_OPS {
+                return Err(refuse(format!("{} autofit columns; the limit is {MAX_DESIGN_OPS}", arr.len())));
+            }
+            ops += arr.len();
+            for item in arr {
+                let s = item.as_str().ok_or_else(|| bad(CMD, "autofit entry must be a string"))?;
+                if s.len() > MAX_ADDRESS_BYTES {
+                    return Err(refuse("autofit entry is too long"));
+                }
+                let _ = RangeRef::parse(s).ok_or_else(|| bad(CMD, "invalid autofit entry"))?;
+            }
+        }
+    }
+    if let Some(v) = design.get("autofitRows") {
+        let arr = v.as_array().ok_or_else(|| bad(CMD, "autofit rows must be an array"))?;
+        if arr.len() > MAX_DESIGN_OPS {
+            return Err(refuse(format!("{} autofit rows; the limit is {MAX_DESIGN_OPS}", arr.len())));
+        }
+        ops += arr.len();
+        for item in arr {
+            let s = item.as_str().ok_or_else(|| bad(CMD, "autofit row entry must be a string"))?;
+            if s.len() > MAX_ADDRESS_BYTES {
+                return Err(refuse("autofit row entry is too long"));
+            }
+            let _ = RangeRef::parse(s).ok_or_else(|| bad(CMD, "invalid autofit row entry"))?;
+        }
+    }
+
+    if let Some(v) = design.get("rowHeights") {
+        let arr = v.as_array().ok_or_else(|| bad(CMD, "row heights must be an array"))?;
+        if arr.len() > MAX_DESIGN_OPS {
+            return Err(refuse(format!("{} row heights; the limit is {MAX_DESIGN_OPS}", arr.len())));
+        }
+        ops += arr.len();
+        for item in arr {
+            only_keys(item, &["rows", "row", "height", "points"], "a row height")?;
+            let rows = item.get("rows").or_else(|| item.get("row")).and_then(Json::as_str).ok_or_else(|| bad(CMD, "missing rows"))?;
+            if rows.len() > MAX_ADDRESS_BYTES {
+                return Err(refuse("rows is too long"));
+            }
+            let _ = RangeRef::parse(rows).ok_or_else(|| bad(CMD, "invalid rows"))?;
+            match (item.get("height").and_then(|v| v.as_f64()), item.get("points").and_then(|v| v.as_f64())) {
+                (Some(h), _) => {
+                    if !(0.0..=546.0).contains(&h) {
+                        return Err(refuse("row height must be between 0 and 546 pixels"));
+                    }
+                }
+                (None, Some(pt)) => {
+                    if !(0.0..=409.5).contains(&pt) {
+                        return Err(refuse("row height must be between 0 and 409.5 points"));
+                    }
+                }
+                _ => return Err(bad(CMD, "missing height or points")),
+            }
+        }
+    }
+
+    let table_items: Vec<&Json> = if let Some(t) = design.get("table") {
+        vec![t]
+    } else if let Some(arr) = design.get("tables").and_then(Json::as_array) {
+        arr.iter().collect()
+    } else {
+        vec![]
+    };
+    if table_items.len() > MAX_DESIGN_OPS {
+        return Err(refuse(format!("{} tables; the limit is {MAX_DESIGN_OPS}", table_items.len())));
+    }
+    ops += table_items.len();
+    if ops > MAX_DESIGN_OPS * 4 {
+        return Err(refuse("too many design operations"));
+    }
+    for item in table_items {
+        only_keys(item, &["range", "name", "style", "header"], "a table")?;
+        let range = item.get("range").and_then(Json::as_str).ok_or_else(|| bad(CMD, "missing range"))?;
+        if range.len() > MAX_ADDRESS_BYTES {
+            return Err(refuse("range is too long"));
+        }
+        let _ = RangeRef::parse(range).ok_or_else(|| bad(CMD, "invalid range"))?;
+        if let Some(name) = item.get("name").and_then(Json::as_str)
+            && name.len() > MAX_SHEET_NAME_BYTES
+        {
+            return Err(refuse("table name is too long"));
+        }
+        if let Some(style) = item.get("style").and_then(Json::as_str)
+            && style.len() > MAX_ADDRESS_BYTES
+        {
+            return Err(refuse("table style is too long"));
+        }
+    }
+
+    Ok(())
+}
+
+fn apply_design_ops(s: &mut Session, sheet: usize, design: &Json) -> Result<()> {
+    // styles
+    if let Some(styles) = design.get("styles").and_then(Json::as_array) {
+        for item in styles {
+            let range = item.get("range").and_then(Json::as_str).unwrap_or("");
+            let style = item.get("style").cloned().unwrap_or(Json::Null);
+            s.execute("home.formatCells", json!({"sheet": sheet, "range": range, "style": style}))?;
+        }
+    }
+    // column widths (support aliases)
+    for key in ["columnWidths", "columns", "widths"] {
+        if let Some(arr) = design.get(key).and_then(Json::as_array) {
+            for item in arr {
+                let cols = item.get("cols").or_else(|| item.get("columns")).or_else(|| item.get("range")).and_then(Json::as_str).unwrap_or("");
+                let mut p = json!({"sheet": sheet, "cols": cols});
+                if let Some(w) = item.get("width").and_then(|v| v.as_f64()) {
+                    p["width"] = json!(w);
+                }
+                if let Some(c) = item.get("chars").and_then(|v| v.as_f64()) {
+                    p["chars"] = json!(c);
+                }
+                s.execute("home.columnWidth", p)?;
+            }
+        }
+    }
+    // autofit columns
+    for key in ["autofitColumns", "autofit"] {
+        if let Some(arr) = design.get(key).and_then(Json::as_array) {
+            for item in arr {
+                if let Some(spec) = item.as_str() {
+                    s.execute("home.autofitColumnWidth", json!({"sheet": sheet, "cols": spec}))?;
+                }
+            }
+        }
+    }
+    if let Some(arr) = design.get("autofitRows").and_then(Json::as_array) {
+        for item in arr {
+            if let Some(spec) = item.as_str() {
+                s.execute("home.autofitRowHeight", json!({"sheet": sheet, "rows": spec}))?;
+            }
+        }
+    }
+    // row heights
+    if let Some(arr) = design.get("rowHeights").and_then(Json::as_array) {
+        for item in arr {
+            let rows = item.get("rows").or_else(|| item.get("row")).and_then(Json::as_str).unwrap_or("");
+            let mut p = json!({"sheet": sheet, "rows": rows});
+            if let Some(h) = item.get("height").and_then(|v| v.as_f64()) {
+                p["height"] = json!(h);
+            }
+            if let Some(pt) = item.get("points").and_then(|v| v.as_f64()) {
+                p["points"] = json!(pt);
+            }
+            s.execute("home.rowHeight", p)?;
+        }
+    }
+    // tables
+    let table_items: Vec<&Json> = if let Some(t) = design.get("table") {
+        vec![t]
+    } else if let Some(arr) = design.get("tables").and_then(Json::as_array) {
+        arr.iter().collect()
+    } else {
+        vec![]
+    };
+    for item in table_items {
+        let mut p = json!({"sheet": sheet});
+        if let Some(range) = item.get("range").and_then(Json::as_str) {
+            p["range"] = json!(range);
+        }
+        if let Some(name) = item.get("name").and_then(Json::as_str) {
+            p["name"] = json!(name);
+        }
+        if let Some(style) = item.get("style").and_then(Json::as_str) {
+            p["style"] = json!(style);
+        }
+        if let Some(header) = item.get("header").and_then(Json::as_bool) {
+            p["header"] = json!(header);
+        }
+        s.execute("insert.table", p)?;
+    }
+    Ok(())
+}
+
+fn design_ops_count(design: Option<&Json>) -> usize {
+    let Some(design) = design else {
+        return 0;
+    };
+    let mut n = 0;
+    if let Some(v) = design.get("styles").and_then(Json::as_array) {
+        n += v.len();
+    }
+    for key in ["columnWidths", "columns", "widths"] {
+        if let Some(v) = design.get(key).and_then(Json::as_array) {
+            n += v.len();
+        }
+    }
+    for key in ["autofitColumns", "autofit"] {
+        if let Some(v) = design.get(key).and_then(Json::as_array) {
+            n += v.len();
+        }
+    }
+    if let Some(v) = design.get("autofitRows").and_then(Json::as_array) {
+        n += v.len();
+    }
+    if let Some(v) = design.get("rowHeights").and_then(Json::as_array) {
+        n += v.len();
+    }
+    if design.get("table").is_some() {
+        n += 1;
+    }
+    if let Some(v) = design.get("tables").and_then(Json::as_array) {
+        n += v.len();
+    }
+    n
 }
 
 #[cfg(test)]
