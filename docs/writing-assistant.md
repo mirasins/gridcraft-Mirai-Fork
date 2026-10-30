@@ -1,6 +1,6 @@
 # Mirai Assistant
 
-> **Last reviewed:** 2026-10-29 · **Last updated:** 2026-10-29 · **Change:** minor (original Mirai logo, two-step Enter confirmation and combined spreadsheet proposals) · **Validation:** offline transport, engine and panel tests; no live-account request.
+> **Last reviewed:** 2026-10-29 · **Last updated:** 2026-10-30 · **Change:** minor (fixed the truncated output schema that made every live request fail as invalid; one synthetic formula request verified end to end with the signed-in account) · **Validation:** offline transport, engine and panel tests; one live synthetic formula request.
 
 Mirai is a right-hand panel in **Review › Mirai Assistant**. It proposes three kinds of changes:
 literal text replacements for selected ordinary cells, spreadsheet changes (cell inputs at absolute
@@ -49,13 +49,16 @@ Requests run without tools or MCP servers, with no session persistence, bounded 
 timeouts, cancellation and process reaping. The browser build reports the assistant unavailable.
 
 Only the selected cell text is sent, and only after confirmation; cells outside the selection are not
-sent. Treat model output as untrusted data until you review it. Local proposal history is in memory only. No live-account check was run for this port;
-all new tests use fake local fixtures/processes.
+sent. Treat model output as untrusted data until you review it. Local proposal history is in memory only. One live check ran with the signed-in account: a synthetic formula
+request through the real Claude CLI. It found and fixed a truncated output schema (one missing
+closing brace since the design-proposal change) that made every live request fail as invalid; the
+returned proposal now parses. The full pane flow with a real account is still to be exercised.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Fixed the truncated output schema (one missing closing brace since the design-proposal change) that made every live Claude Code request fail as an invalid response. Schema-validity regression test, a captured real-envelope fixture, and one synthetic formula request verified end to end with the signed-in account. |
 | 2026-10-29 | minor | On-sheet proposal preview: proposed cell inputs painted over the sheet (an isolated overlay; nothing is edited until applied), an “Apply?” banner, Enter applies and Esc cancels, and the chat keeps only a short summary. Stale proposals hide; cancelling never touches the workbook or the undo history. Offline tests only. |
 | 2026-10-29 | minor | Formula work: an optional bounded window of cells around the selection (default 15, at most 60 rows and columns away, 32 KiB, formulas as typed) is sent after the same confirmation; new `assistant.formulaContext` engine command, pane checkbox and notice line. Fixed contexts over selected numeric cells failing every apply as changed. Offline tests only. |
 | 2026-10-29 | minor | Added the original Mirai logo, two-step Enter confirmation, and atomic mixed text and cell proposals; no live-account or real-IME check. |

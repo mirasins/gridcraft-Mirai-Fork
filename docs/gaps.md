@@ -191,6 +191,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | §22: fixed the truncated output schema that made every live Claude Code request fail as invalid (missing closing brace since the design-proposal change); schema-validity regression test, real-envelope fixture, one live synthetic request verified. |
 | 2026-10-29 | minor | §22: Mirai proposals preview on the sheet (proposed inputs painted over their cells, “Apply?” banner, Enter applies, Esc cancels); the chat keeps a one-line summary; cancelling touches nothing. |
 | 2026-10-29 | minor | §22: formula work over a bounded window of cells around the selection (`assistant.formulaContext`, pane checkbox, consent notice); fixed numeric selections failing every apply as changed. |
 | 2026-10-29 | minor | §22: Mirai spreadsheet change proposals (cell inputs up to 256 cells, optional requested new sheet), previewed and applied as one undo step; stale proposals rejected; formula and workbook analysis remain open |

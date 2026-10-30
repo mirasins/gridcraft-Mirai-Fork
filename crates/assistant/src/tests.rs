@@ -258,6 +258,29 @@ fn cancelled_flag_short_circuits_before_spawning() {
 }
 
 #[test]
+fn output_schema_is_valid_json() {
+    // The schema is passed to the real Claude CLI; a truncated one breaks every live request
+    // (introduced once by an edit that dropped the final closing brace).
+    let parsed: serde_json::Value = serde_json::from_str(crate::protocol::OUTPUT_SCHEMA).expect("OUTPUT_SCHEMA must be valid JSON");
+    assert!(parsed.is_object());
+}
+
+#[test]
+fn live_envelope_from_the_real_cli_parses() {
+    // A minimized copy of a real `claude --safe-mode -p --json-schema` answer, captured with the
+    // user's own signed-in account over a synthetic formula request ("total the Sales column
+    // into C6" with a windowed context): no suggestions, a grid write of a correct formula, and
+    // a plain explanation. Only synthetic content; no session identifiers or usage data.
+    let envelope = r#"{"type":"result","subtype":"success","is_error":false,"api_error_status":null,"structured_output":{"suggestions":[],"explanation":"C6 now has =SUM(B2:B4), which adds the Sales values in B2:B4 to give 4400.","grid":{"sheet_name":"Sheet1","cells":[{"cell":"C6","input":"=SUM(B2:B4)"}]},"design":null}}"#;
+    let parsed = parse_response(envelope.as_bytes(), 2).expect("the live envelope must parse");
+    let grid = parsed.grid.expect("live answers carry grid work");
+    assert_eq!(grid.sheet_name.as_deref(), Some("Sheet1"));
+    assert_eq!(grid.cells.len(), 1);
+    assert_eq!(grid.cells[0].cell, "C6");
+    assert_eq!(grid.cells[0].input, "=SUM(B2:B4)");
+}
+
+#[test]
 fn response_validates_structured_output() {
     let good = success(r#"{"suggestions":[{"index":0,"text":"Estimado señor."}],"explanation":"More formal."}"#);
     let parsed = parse_response(&good, 2);
