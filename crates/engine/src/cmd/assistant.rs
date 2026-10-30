@@ -641,10 +641,26 @@ fn width_cols(item: &Json) -> Option<&str> {
     ["cols", "columns", "range", "col"].iter().find_map(|k| item.get(*k)).and_then(Json::as_str)
 }
 
+/// A row/column spec without the spaces the model sometimes writes around its parts
+/// (`" B, D:F "` → `"B,D:F"`); a quoted sheet name keeps its own spaces.
+fn compact_lines(spec: &str) -> String {
+    let spec = spec.trim();
+    let (prefix, body) = match spec.rsplit_once('!') {
+        Some((sheet, body)) => (Some(sheet), body),
+        None => (None, spec),
+    };
+    let body = body.split(',').map(|part| part.split(char::is_whitespace).collect::<String>()).collect::<Vec<_>>().join(",");
+    match prefix {
+        Some(sheet) => format!("{sheet}!{body}"),
+        None => body,
+    }
+}
+
 /// Whether `spec` names rows or columns the way the size commands read them: `B`, `B:D`, `3`,
-/// `2:5`, a comma list (`B:B,D:F`), optionally `Sheet!`-prefixed.
+/// `2:5`, a comma list (`B:B,D:F`), optionally `Sheet!`-prefixed. Spaces are ignored.
 fn valid_lines(spec: &str) -> bool {
-    let (_, body) = super::split_sheet(spec);
+    let spec = compact_lines(spec);
+    let (_, body) = super::split_sheet(&spec);
     body.split(',').all(|part| super::parse_lines(part).is_some())
 }
 
@@ -827,7 +843,7 @@ fn apply_design_ops(s: &mut Session, sheet: usize, design: &Json) -> Result<()> 
         if let Some(arr) = design.get(key).and_then(Json::as_array) {
             for item in arr {
                 let cols = width_cols(item).unwrap_or("");
-                let mut p = json!({"sheet": sheet, "cols": cols});
+                let mut p = json!({"sheet": sheet, "cols": compact_lines(cols)});
                 if let Some(w) = item.get("width").and_then(|v| v.as_f64()) {
                     p["width"] = json!(w);
                 }
@@ -843,7 +859,7 @@ fn apply_design_ops(s: &mut Session, sheet: usize, design: &Json) -> Result<()> 
         if let Some(arr) = design.get(key).and_then(Json::as_array) {
             for item in arr {
                 if let Some(spec) = item.as_str() {
-                    s.execute("home.autofitColumnWidth", json!({"sheet": sheet, "cols": spec}))?;
+                    s.execute("home.autofitColumnWidth", json!({"sheet": sheet, "cols": compact_lines(spec)}))?;
                 }
             }
         }
@@ -851,7 +867,7 @@ fn apply_design_ops(s: &mut Session, sheet: usize, design: &Json) -> Result<()> 
     if let Some(arr) = design.get("autofitRows").and_then(Json::as_array) {
         for item in arr {
             if let Some(spec) = item.as_str() {
-                s.execute("home.autofitRowHeight", json!({"sheet": sheet, "rows": spec}))?;
+                s.execute("home.autofitRowHeight", json!({"sheet": sheet, "rows": compact_lines(spec)}))?;
             }
         }
     }
@@ -859,7 +875,7 @@ fn apply_design_ops(s: &mut Session, sheet: usize, design: &Json) -> Result<()> 
     if let Some(arr) = design.get("rowHeights").and_then(Json::as_array) {
         for item in arr {
             let rows = item.get("rows").or_else(|| item.get("row")).and_then(Json::as_str).unwrap_or("");
-            let mut p = json!({"sheet": sheet, "rows": rows});
+            let mut p = json!({"sheet": sheet, "rows": compact_lines(rows)});
             if let Some(h) = item.get("height").and_then(|v| v.as_f64()) {
                 p["height"] = json!(h);
             }

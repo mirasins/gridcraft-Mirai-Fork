@@ -111,7 +111,7 @@ fn bare_and_listed_columns_and_rows_are_accepted() {
     let mut s = session();
     let context = s.execute("assistant.context", json!({})).unwrap();
     let design = json!({
-        "columnWidths": [{"cols": "B", "width": 120.0}, {"col": "D", "width": 80.0}, {"cols": "F:F,H", "chars": 10.0}],
+        "columnWidths": [{"cols": "B", "width": 120.0}, {"col": "D", "width": 80.0}, {"cols": " F:F, H ", "chars": 10.0}],
         "autofitColumns": ["C"],
         "autofitRows": ["2"],
         "rowHeights": [{"rows": "3", "points": 20.0}]
