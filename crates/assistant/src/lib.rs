@@ -16,8 +16,8 @@ pub use client::{Client, Provider};
 pub use error::Error;
 pub use protocol::model_name;
 pub use protocol::{
-    AuthState, MAX_EXPLANATION_BYTES, MAX_INSTRUCTION_BYTES, MAX_MODEL_BYTES, MAX_OUTPUT_BYTES, MAX_STRUCTURE_BYTES, MAX_TARGETS, MAX_TEXT_BYTES,
-    Request, Response, Suggestion,
+    AuthState, GridCell, GridProposal, MAX_CELL_ADDRESS_BYTES, MAX_EXPLANATION_BYTES, MAX_GRID_BYTES, MAX_GRID_CELLS, MAX_INSTRUCTION_BYTES,
+    MAX_MODEL_BYTES, MAX_OUTPUT_BYTES, MAX_SHEET_NAME_CHARS, MAX_STRUCTURE_BYTES, MAX_TARGETS, MAX_TEXT_BYTES, Request, Response, Suggestion,
 };
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

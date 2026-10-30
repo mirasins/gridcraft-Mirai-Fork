@@ -1,26 +1,36 @@
 # Mirai Assistant
 
-> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (first text-assistance panel) · **Validation:** offline transport, engine and panel tests; no live-account request.
+> **Last reviewed:** 2026-10-29 · **Last updated:** 2026-10-29 · **Change:** minor (original Mirai logo, two-step Enter confirmation and combined spreadsheet proposals) · **Validation:** offline transport, engine and panel tests; no live-account request.
 
-Mirai is a right-hand panel in **Review › Mirai Assistant**. It proposes literal text replacements for
-selected ordinary cells. It does not create formulas, workbooks or charts, analyze a whole workbook,
-or execute commands produced by the model.
+Mirai is a right-hand panel in **Review › Mirai Assistant**. It proposes two kinds of changes:
+literal text replacements for selected ordinary cells, and spreadsheet changes: cell inputs at absolute
+addresses (plain values or formulas starting with `=`) and, only when you explicitly ask for it, a new
+sheet. It does not analyze a whole workbook, create charts, or execute commands produced by the model.
 
 ## Use
 
-1. Select at most 256 ordinary cells (64 KiB of source text at most).
+1. Select at most 256 cells (64 KiB of source text at most). Only this selection is sent to Claude.
 2. Open **Review › Mirai Assistant**.
-3. Write an instruction, confirm sending that request and choose Send. Confirmation is required for
-   every request and is never persisted as a blanket permission.
-4. Compare the original and proposed text. Dismiss it or apply all changes with one Undo step.
-   A changed workbook revision or target text invalidates the proposal; ask for a new context.
-5. Cancel or New Conversation stops the request. Changing workbooks clears the panel's local state.
+3. Write an instruction. Enter or Send shows a notice of what is sent and where changes may apply;
+   Enter or Send again confirms. Shift+Enter inserts a line. Confirmation is required for every
+   request and is never persisted as a blanket permission.
+4. Review the preview before applying. Text proposals show original and proposed text. Spreadsheet
+   proposals list each cell address and its new input, with the destination sheet. A proposal may
+   change cells outside the selection; the preview warns that existing cells may be overwritten.
+   Dismiss it, or apply all changes with one Undo step (Ctrl+Z).
+5. A proposal is rejected when the workbook revision or target text has changed since the context was
+   taken; ask again for a new proposal.
+6. Cancel or New Conversation stops the request. Changing workbooks clears the panel's local state.
 
-The engine commands `assistant.context` and `assistant.apply` implement the bounded snapshot and
-validated apply. Formula, merged, table, picture, spilled and protected-sheet cells are refused,
-not silently skipped. Output is always literal text: leading `=`, `+`, `-` and `@` are refused.
-Replacing a numeric/date cell changes it to text, as the preview indicates. Programmatic requests
-still require `confirm: true`; no cloud request happens on opening the panel.
+The engine commands `assistant.context`, `assistant.apply` (text) and `assistant.applyGrid`
+(spreadsheet changes) implement the bounded snapshot and validated apply. Text output is always
+literal: leading `=`, `+`, `-` and `@` are refused, and replacing a numeric/date cell changes it to
+text, as the preview indicates. Spreadsheet proposals are limited to 256 cells and 64 KiB of addresses
+and inputs; addresses must be absolute A1 (for example `B12`), duplicates are refused, and a new sheet
+name is checked before anything changes. Selected formula, merged, picture and spilled cells and
+protected sheets are refused as context. Grid changes can write formulas but refuse merged, picture
+and spilled cells. Programmatic requests still require `confirm: true`; no cloud
+request happens on opening the panel.
 
 ## Account and privacy
 
@@ -31,12 +41,14 @@ Credential overrides are removed from the child process; credentials are never l
 Requests run without tools or MCP servers, with no session persistence, bounded input/output and
 timeouts, cancellation and process reaping. The browser build reports the assistant unavailable.
 
-Selected cell text is sent only after confirmation. Treat model output as untrusted data until you
-review it. Local proposal history is in memory only. No live-account check was run for this port;
+Only the selected cell text is sent, and only after confirmation; cells outside the selection are not
+sent. Treat model output as untrusted data until you review it. Local proposal history is in memory only. No live-account check was run for this port;
 all new tests use fake local fixtures/processes.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | Added the original Mirai logo, two-step Enter confirmation, and atomic mixed text and cell proposals; no live-account or real-IME check. |
+| 2026-10-29 | minor | Spreadsheet change proposals (cell inputs, explicit new sheet), previewed and applied as one undo step; 256-cell limit; stale proposals rejected; overwrite warning. |
 | 2026-10-26 | minor | First selected-cell Mirai panel, standalone official-Claude transport, revision-checked literal apply and offline tests. |

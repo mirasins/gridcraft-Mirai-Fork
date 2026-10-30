@@ -74,6 +74,10 @@ pub struct UiState {
     /// The manual preference, retained when following the system appearance.
     pub dark: bool,
     pub system_theme: bool,
+    /// The interface skin (palette family), chosen independently of light, dark or system. Saved
+    /// as `"classic"` or `"mirai"`; an unknown value reads as the default.
+    #[serde(deserialize_with = "theme::lenient_skin")]
+    pub skin: theme::Skin,
     pub ribbon_tab: String,
     pub ribbon_collapsed: bool,
     pub formula_bar_expanded: bool,
@@ -123,6 +127,7 @@ impl Default for UiState {
         UiState {
             dark: false,
             system_theme: false,
+            skin: theme::Skin::default(),
             ribbon_tab: "Home".into(),
             ribbon_collapsed: false,
             formula_bar_expanded: false,

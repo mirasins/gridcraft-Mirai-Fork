@@ -96,6 +96,7 @@ struct Proposal {
     context: Context,
     rows: Vec<Row>,
     changes: Vec<Json>,
+    grid: Option<Json>,
     explanation: String,
 }
 
@@ -105,10 +106,15 @@ pub struct State {
     pub open: bool,
     pub instruction: String,
     pub model: String,
-    /// Warning modal visibility
+    /// Send notice visibility (the first Enter or Send press opens it).
     pub show_warning: bool,
-    /// Whether user confirmed the warning
-    pub consent_given: bool,
+    /// Fingerprint of the workbook, selection, model and instruction the open notice was shown for.
+    /// Sending needs the same fingerprint again; any change cancels the notice.
+    consent_key: Option<u64>,
+    /// An IME composition is in progress in the instruction box, so Enter belongs to the IME.
+    ime_composing: bool,
+    /// The instruction box had focus last frame; plain Enter only counts there.
+    instruction_focus: bool,
     pub history: Vec<String>,
     pub status: Option<Note>,
     /// Workbook (document uid) this conversation belongs to.
@@ -127,7 +133,7 @@ impl State {
         }
         self.pending = None;
         self.show_warning = false;
-        self.consent_given = false;
+        self.consent_key = None;
     }
 }
 
@@ -268,10 +274,40 @@ fn build_proposal(context: Context, response: Response) -> Result<Proposal, Stri
             return Err("A suggested text is too long to apply.".into());
         }
         let target = context.targets.get(suggestion.index).ok_or("The assistant changed a cell outside the selection. Nothing was applied.")?;
+        let cell = context
+            .json
+            .get("targets")
+            .and_then(Json::as_array)
+            .and_then(|ts| ts.get(suggestion.index))
+            .and_then(|t| t.get("cell"))
+            .and_then(Json::as_str);
+        if response.grid.as_ref().is_some_and(|grid| grid.sheet_name.is_none() && grid.cells.iter().any(|c| Some(c.cell.as_str()) == cell)) {
+            // A structured cell write is more explicit than a duplicate text suggestion.
+            continue;
+        }
         rows.push(Row { label: target.label.clone(), original: target.original.clone(), proposed: suggestion.text.clone() });
         changes.push(json!({"index": target.index, "text": suggestion.text, "markdown": false}));
     }
-    Ok(Proposal { context, rows, changes, explanation: response.explanation })
+    let grid = if let Some(grid) = response.grid {
+        let destination = grid.sheet_name.as_deref().map(|name| format!("New sheet: {name}")).unwrap_or_else(|| {
+            let name = context.json.get("sheet_name").and_then(Json::as_str).unwrap_or("original sheet");
+            format!("Sheet: {name} (existing cells may be overwritten)")
+        });
+        if grid.cells.is_empty() && grid.sheet_name.is_some() {
+            rows.push(Row { label: destination.clone(), original: String::new(), proposed: "Create sheet".into() });
+        }
+        for cell in &grid.cells {
+            rows.push(Row {
+                label: format!("{destination} — {}", cell.cell),
+                original: "Not included in the selected context".into(),
+                proposed: cell.input.clone(),
+            });
+        }
+        Some(serde_json::to_value(grid).map_err(|_| "Could not prepare spreadsheet changes.")?)
+    } else {
+        None
+    };
+    Ok(Proposal { context, rows, changes, grid, explanation: response.explanation })
 }
 
 /// The sign-in guidance for a failed request. It names only official steps; no keys, no fallbacks.
@@ -315,11 +351,71 @@ fn parse_context(raw: &Json, owner: u64, revision: u64) -> Result<Context, Strin
     Ok(Context { owner, revision, json: raw.clone(), targets })
 }
 
-/// Sends one request. Refused unless `confirmed` (the consent box, or `confirm: true` from a
+/// Fingerprint of everything the user agrees to send: workbook, selection snapshot, model and
+/// instruction. Fails when the selection cannot be sent at all.
+fn consent_key(app: &mut SheetApp) -> Result<u64, String> {
+    use std::hash::{Hash, Hasher};
+    let (owner, revision) = active(app).ok_or("Open a workbook first.")?;
+    let raw = app.run("assistant.context", json!({}))?;
+    parse_context(&raw, owner, revision)?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    owner.hash(&mut hasher);
+    revision.hash(&mut hasher);
+    raw.to_string().hash(&mut hasher);
+    app.assistant.instruction.hash(&mut hasher);
+    app.assistant.model.hash(&mut hasher);
+    Ok(hasher.finish())
+}
+
+/// Opens the send notice (first Enter or Send press). Nothing is sent from here.
+fn open_notice(app: &mut SheetApp) {
+    if !SUPPORTED {
+        app.assistant.status = Some(note(true, DESKTOP_ONLY));
+        return;
+    }
+    if app.assistant.worker.is_some() {
+        app.assistant.status = Some(note(true, "A request is already running. Wait for it or cancel it."));
+        return;
+    }
+    if app.assistant.instruction.trim().is_empty() {
+        app.assistant.status = Some(note(true, "Write what the assistant should do."));
+        return;
+    }
+    match consent_key(app) {
+        Ok(key) => {
+            app.assistant.consent_key = Some(key);
+            app.assistant.show_warning = true;
+            app.assistant.status = None;
+        }
+        Err(error) => app.assistant.status = Some(note(true, error)),
+    }
+}
+
+/// Cancels the notice and the consent bound to it. Nothing is sent.
+fn close_notice(app: &mut SheetApp) {
+    app.assistant.show_warning = false;
+    app.assistant.consent_key = None;
+}
+
+/// Sends only if the snapshot still matches the one the notice showed; otherwise cancels the notice.
+fn confirm_send(app: &mut SheetApp) {
+    let bound = app.assistant.consent_key.take();
+    app.assistant.show_warning = false;
+    let result = match (bound, consent_key(app)) {
+        (Some(bound), Ok(now)) if bound == now => request(app, None, None, true).map(|_| ()),
+        (_, Err(error)) => Err(error),
+        _ => Err("The selection, model or instruction changed after the notice, so nothing was sent. Review it and send again.".into()),
+    };
+    if let Err(error) = result {
+        app.assistant.status = Some(note(true, error));
+    }
+}
+
+/// Sends one request. Refused unless `confirmed` (the send notice, or `confirm: true` from a
 /// program) — checked before anything is read or started.
 fn request(app: &mut SheetApp, instruction: Option<&str>, model: Option<&str>, confirmed: bool) -> Result<Json, String> {
     if !confirmed {
-        return Err("Confirm first: the selected cells' text is sent to Claude Code. Tick the consent box or pass confirm: true.".into());
+        return Err("Confirm first: the selected cells' text is sent to Claude Code. Review the notice or pass confirm: true.".into());
     }
     if !SUPPORTED {
         return Err(DESKTOP_ONLY.into());
@@ -370,7 +466,7 @@ fn request(app: &mut SheetApp, instruction: Option<&str>, model: Option<&str>, c
     app.assistant.pending = Some(context);
     app.assistant.proposal = None;
     app.assistant.show_warning = false;
-    app.assistant.consent_given = false;
+    app.assistant.consent_key = None;
     app.assistant.open = true;
     app.assistant.status = Some(note(false, "Asking Claude Code…"));
     app.assistant.instruction.clear();
@@ -396,11 +492,16 @@ fn apply(app: &mut SheetApp) -> Result<Json, String> {
         app.assistant.status = Some(note(true, text));
         return Err(text.into());
     }
-    if proposal.changes.is_empty() {
+    if proposal.changes.is_empty() && proposal.grid.is_none() {
         return Err("There are no changes to apply.".into());
     }
-    let count = proposal.changes.len();
-    match app.run("assistant.apply", json!({"context": proposal.context.json, "changes": proposal.changes})) {
+    let count = proposal.changes.len() + proposal.grid.as_ref().and_then(|g| g.get("cells")).and_then(Json::as_array).map_or(0, Vec::len);
+    let (command, params) = if let Some(grid) = proposal.grid {
+        ("assistant.applyGrid", json!({"context": proposal.context.json, "grid": grid, "changes": proposal.changes}))
+    } else {
+        ("assistant.apply", json!({"context": proposal.context.json, "changes": proposal.changes}))
+    };
+    match app.run(command, params) {
         Ok(_) => {
             app.assistant.status = Some(note(false, format!("Applied {count} change(s). Undo with Ctrl+Z.")));
             Ok(json!({"applied": count}))
@@ -420,7 +521,7 @@ fn status_json(app: &SheetApp) -> Json {
         "supported": SUPPORTED,
         "pending": state.worker.is_some(),
         "show_warning": state.show_warning,
-        "consent_given": state.consent_given,
+        "consent_given": state.consent_key.is_some(),
         "proposal": state.proposal.as_ref().map(|p| json!({"changes": p.rows.len(), "explanation": p.explanation})),
         "status": state.status.as_ref().map(|n| n.text.clone()),
         "error": state.status.as_ref().is_some_and(|n| n.error),
@@ -476,9 +577,29 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     );
 }
 
+fn logo(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let id = egui::Id::unique("mirai-assistant-logo");
+    if let Some(cached) = ctx.data(|data| data.get_temp::<Option<egui::TextureHandle>>(id)) {
+        return cached;
+    }
+    let texture = egui_extras::image::load_svg_bytes_with_size(
+        include_bytes!("../../../assets/assistant/mirai-gorrion.svg"),
+        egui::SizeHint::Width(256),
+        &Default::default(),
+    )
+    .ok()
+    .map(|image| ctx.load_texture("mirai-assistant-logo", image, egui::TextureOptions::LINEAR));
+    ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+    texture
+}
+
 fn header(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Mirai Assistant").font(theme::ui_bold(15.0)));
+        if let Some(logo) = logo(ui.ctx()) {
+            ui.add(egui::Image::new(&logo).fit_to_exact_size(egui::vec2(94.0, 47.0))).on_hover_text("Mirai Assistant");
+        } else {
+            ui.label(RichText::new("Mirai Assistant").font(theme::ui_bold(15.0)));
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.small_button("×").on_hover_text("Close").clicked() {
                 set_open(app, false);
@@ -488,7 +609,7 @@ fn header(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
             }
         });
     });
-    ui.label(RichText::new("Drafts new text for the selected cells. Nothing is sent until you confirm.").small().color(t.text_dim));
+    ui.label(RichText::new("Drafts cell and sheet changes for review. Selected cells are sent only after confirmation.").small().color(t.text_dim));
 }
 
 fn body(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
@@ -517,7 +638,7 @@ fn body(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
 
 fn welcome(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     if app.assistant.history.is_empty() {
-        ui.label("Select cells that contain text, describe the change, tick the consent box and choose Send.");
+        ui.label("Select cells, describe the change, then press Enter or Send to review the notice.");
         ui.label(RichText::new("Quick drafts only fill the instruction box. They never send by themselves.").small().color(t.text_dim));
     }
     ui.horizontal_wrapped(|ui| {
@@ -576,40 +697,43 @@ fn preview(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
 
 fn composer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     let pending = app.assistant.worker.is_some();
+    if app.assistant.show_warning && consent_key(app).ok() != app.assistant.consent_key {
+        close_notice(app);
+        app.assistant.status = Some(note(true, "The selection, model or instruction changed, so the notice was closed. Review it and send again."));
+    }
+    let notice_open = app.assistant.show_warning;
+    let focused = app.assistant.instruction_focus;
+    let enter = take_enter(&mut app.assistant, ui, focused || notice_open);
     ui.add(egui::TextEdit::singleline(&mut app.assistant.model).hint_text("Model (optional; Claude Code default)").desired_width(f32::INFINITY));
-    ui.add(
+    let instruction = ui.add(
         egui::TextEdit::multiline(&mut app.assistant.instruction)
             .hint_text("What should change? e.g. Make these shorter.")
             .desired_rows(3)
             .desired_width(f32::INFINITY),
     );
+    app.assistant.instruction_focus = instruction.has_focus();
     clamp_text(&mut app.assistant.instruction, MAX_INSTRUCTION_BYTES);
     clamp_text(&mut app.assistant.model, MAX_MODEL_BYTES);
 
-    // Show warning modal instead of checkbox
-    if app.assistant.show_warning {
-        egui::Window::new("Warning").collapsible(false).resizable(false).default_pos(egui::pos2(100.0, 100.0)).show(ui.ctx(), |ui| {
-            ui.label("You are about to send the selected cells' text to Claude Code.");
-            ui.label("This action cannot be undone.");
-            ui.label("");
+    // Enter opens the notice; a second Enter (or Send inside the notice) confirms.
+    let mut confirm = enter && notice_open;
+    let open = enter && !notice_open;
+    let mut cancel = false;
+    if notice_open {
+        egui::Window::new("Send to Claude Code?").collapsible(false).resizable(false).default_pos(egui::pos2(100.0, 100.0)).show(ui.ctx(), |ui| {
+            ui.label("The selected cells' text and your instruction will be sent to Claude Code, using your own sign-in.");
+            ui.label("Suggested changes are shown first and change nothing until you choose Apply all. They can overwrite cells on the current sheet or create a new sheet.");
+            ui.label(RichText::new("Enter sends · Shift+Enter new line · Esc cancels").small().color(t.text_dim));
             ui.horizontal(|ui| {
                 if ui.button("Cancel").clicked() {
-                    app.assistant.show_warning = false;
-                    app.assistant.consent_given = false;
+                    cancel = true;
                 }
-                if ui.button("Continue").clicked() {
-                    app.assistant.show_warning = false;
-                    app.assistant.consent_given = true;
+                if ui.button("Send").clicked() {
+                    confirm = true;
                 }
             });
-            // Close with Enter or Escape
-            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                app.assistant.show_warning = false;
-                app.assistant.consent_given = true;
-            }
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                app.assistant.show_warning = false;
-                app.assistant.consent_given = false;
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                cancel = true;
             }
         });
     }
@@ -617,27 +741,47 @@ fn composer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     let ready = SUPPORTED && !pending && active(app).is_some() && !app.assistant.instruction.trim().is_empty();
     let mut send = false;
     ui.horizontal(|ui| {
-        send = ui.add_enabled(ready, egui::Button::new("Send")).clicked();
+        send = ui.add_enabled(ready && !notice_open, egui::Button::new("Send")).clicked();
         let hint = if !SUPPORTED { "Desktop app only." } else { "" };
         ui.label(RichText::new(hint).small().color(t.text_dim));
     });
-    if send {
-        // Show warning before sending
-        app.assistant.show_warning = true;
-        app.assistant.consent_given = false;
-    }
 
-    // If warning was accepted, proceed with send and reset the flag
-    if app.assistant.consent_given {
-        let confirmed = true;
-        let instruction = app.assistant.instruction.clone();
-        let model = app.assistant.model.clone();
-        if let Err(error) = request(app, Some(&instruction), Some(&model), confirmed) {
-            app.assistant.status = Some(note(true, error));
-        }
-        // Reset the flag so we don't send again on next frame
-        app.assistant.consent_given = false;
+    if cancel {
+        close_notice(app);
+    } else if confirm {
+        confirm_send(app);
+    } else if open || send {
+        open_notice(app);
     }
+}
+
+/// Takes one plain Enter press (no modifiers, not a key repeat) typed into the focused instruction box.
+/// Returns false, and leaves the event for the text box, while an IME composition is active or an IME
+/// event arrived this frame: that Enter belongs to the IME (candidate choice or commit).
+fn take_enter(state: &mut State, ui: &mut Ui, focused: bool) -> bool {
+    ui.input_mut(|i| {
+        let mut ime_event = false;
+        for event in &i.events {
+            if let egui::Event::Ime(ime) = event {
+                ime_event = true;
+                match ime {
+                    egui::ImeEvent::Preedit { text, .. } => state.ime_composing = !text.is_empty(),
+                    egui::ImeEvent::Commit(_) => state.ime_composing = false,
+                    _ => {}
+                }
+            }
+        }
+        if !focused {
+            state.ime_composing = false;
+        }
+        if !focused || ime_event || state.ime_composing {
+            return false;
+        }
+        let at = i.events.iter().position(
+            |event| matches!(event, egui::Event::Key { key: egui::Key::Enter, pressed: true, repeat: false, modifiers, .. } if !modifiers.any()),
+        );
+        at.map(|at| i.events.remove(at)).is_some()
+    })
 }
 
 #[cfg(test)]
@@ -645,6 +789,14 @@ mod tests {
     use super::*;
     use gridcraft_assistant::Suggestion;
     use gridcraft_engine::Session;
+
+    #[test]
+    fn mirai_logo_loads_and_is_cached() {
+        let ctx = egui::Context::default();
+        let first = logo(&ctx).expect("original Mirai logo loads");
+        let second = logo(&ctx).expect("cached Mirai logo loads");
+        assert_eq!(first.id(), second.id());
+    }
 
     fn app() -> SheetApp {
         let mut session = Session::new();
@@ -670,7 +822,7 @@ mod tests {
     }
 
     fn response(suggestions: Vec<Suggestion>) -> Response {
-        Response { suggestions, explanation: "Shorter.".into() }
+        Response { suggestions, explanation: "Shorter.".into(), grid: None }
     }
 
     fn running(app: &mut SheetApp) -> Arc<AtomicBool> {
@@ -731,11 +883,11 @@ mod tests {
         let flag = running(&mut app);
         app.assistant.open = true;
         app.assistant.show_warning = false;
-        app.assistant.consent_given = true;
+        app.assistant.consent_key = Some(1);
         set_open(&mut app, false);
         assert!(flag.load(Ordering::SeqCst));
         assert!(app.assistant.worker.is_none());
-        assert!(!app.assistant.consent_given);
+        assert!(app.assistant.consent_key.is_none());
 
         let flag = running(&mut app);
         app.run("ui.assistant.newConversation", json!({})).unwrap_or(Json::Null);
@@ -767,6 +919,62 @@ mod tests {
     }
 
     #[test]
+    fn grid_proposal_previews_and_applies_multiple_cells() {
+        let mut app = app();
+        let (uid, revision) = active(&app).unwrap();
+        let raw = app.run("assistant.context", json!({})).unwrap();
+        let ctx = parse_context(&raw, uid, revision).unwrap();
+        let answer = Response {
+            suggestions: vec![],
+            explanation: "Table".into(),
+            grid: Some(gridcraft_assistant::GridProposal {
+                sheet_name: Some("Expenses".into()),
+                cells: vec![
+                    gridcraft_assistant::GridCell { cell: "A1".into(), input: "Date".into() },
+                    gridcraft_assistant::GridCell { cell: "B1".into(), input: "Amount".into() },
+                ],
+            }),
+        };
+        let proposal = build_proposal(ctx, answer).unwrap();
+        assert_eq!(proposal.rows.len(), 2);
+        assert!(proposal.rows[0].label.contains("Expenses"));
+        app.assistant.proposal = Some(proposal);
+        app.run("ui.assistant.apply", json!({})).unwrap();
+        let doc = app.session.active().unwrap();
+        let sheet = doc.wb.active().unwrap();
+        assert_eq!(sheet.name, "Expenses");
+        assert_eq!(app.run("cell.get", json!({"cell": "A1"})).unwrap()["value"], "Date");
+        assert_eq!(app.run("cell.get", json!({"cell": "B1"})).unwrap()["value"], "Amount");
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().wb.sheets.len(), 1);
+    }
+
+    #[test]
+    fn mixed_proposal_combines_text_and_cells_in_one_undo() {
+        let mut app = app();
+        app.run("cell.set", json!({"cell":"A1", "input":"Old"})).unwrap();
+        let (uid, revision) = active(&app).unwrap();
+        let raw = app.run("assistant.context", json!({})).unwrap();
+        let ctx = parse_context(&raw, uid, revision).unwrap();
+        let answer = Response {
+            suggestions: vec![Suggestion { index: 0, text: "005".into(), markdown: false }],
+            explanation: String::new(),
+            grid: Some(gridcraft_assistant::GridProposal {
+                sheet_name: None,
+                cells: vec![gridcraft_assistant::GridCell { cell: "B1".into(), input: "42".into() }],
+            }),
+        };
+        let proposal = build_proposal(ctx, answer).unwrap();
+        assert_eq!(proposal.rows.len(), 2);
+        app.assistant.proposal = Some(proposal);
+        app.run("ui.assistant.apply", json!({})).unwrap();
+        assert_eq!(app.run("cell.get", json!({"cell":"A1"})).unwrap()["type"], "text");
+        assert_eq!(app.run("cell.get", json!({"cell":"B1"})).unwrap()["value"], 42.0);
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.run("cell.get", json!({"cell":"A1"})).unwrap()["value"], "Old");
+    }
+
+    #[test]
     fn refuses_markdown_and_out_of_selection_answers() {
         let app = app();
         let ctx = context(&app);
@@ -794,5 +1002,105 @@ mod tests {
     fn guidance_names_only_official_steps() {
         assert!(guidance(AssistantError::Authentication).contains("claude auth login"));
         assert!(guidance(AssistantError::Unavailable).contains("claude"));
+    }
+
+    fn enter(modifiers: egui::Modifiers, repeat: bool) -> egui::Event {
+        egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat, modifiers }
+    }
+
+    /// Runs one frame of `take_enter` and returns whether it took the Enter and how many events remain.
+    fn frame_enter(ctx: &egui::Context, state: &mut State, events: Vec<egui::Event>, focused: bool) -> (bool, usize) {
+        let mut result = (false, 0);
+        let mut out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+            let taken = take_enter(state, ui, focused);
+            result = (taken, ui.input(|i| i.events.len()));
+        });
+        out.textures_delta.clear();
+        result
+    }
+
+    #[test]
+    fn plain_enter_is_taken_once_and_other_enters_stay_with_the_text_box() {
+        let none = egui::Modifiers::NONE;
+        let mut state = State::default();
+        let ctx = egui::Context::default();
+        assert_eq!(frame_enter(&ctx, &mut state, vec![enter(none, false)], true), (true, 0));
+        // egui marks a press of a key that is still held as a repeat; holding Enter must not send again.
+        assert_eq!(frame_enter(&ctx, &mut state, vec![enter(none, false)], true), (false, 1));
+        let ctx = egui::Context::default();
+        assert_eq!(frame_enter(&ctx, &mut state, vec![enter(egui::Modifiers::SHIFT, false)], true), (false, 1));
+        let ctx = egui::Context::default();
+        assert_eq!(frame_enter(&ctx, &mut state, vec![enter(none, false)], false), (false, 1));
+    }
+
+    #[test]
+    fn enter_belongs_to_the_ime_while_composing_and_on_commit() {
+        let mut state = State::default();
+        let ctx = egui::Context::default();
+        let none = egui::Modifiers::NONE;
+        let preedit = |text: &str| egui::Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: None });
+        assert_eq!(frame_enter(&ctx, &mut state, vec![preedit("ni"), enter(none, false)], true), (false, 2));
+        assert!(state.ime_composing);
+        assert_eq!(frame_enter(&ctx, &mut state, vec![enter(none, false)], true), (false, 1));
+        assert_eq!(frame_enter(&ctx, &mut state, vec![egui::Event::Ime(egui::ImeEvent::Commit("你".into())), enter(none, false)], true), (false, 2));
+        assert!(!state.ime_composing);
+        let ctx = egui::Context::default();
+        assert_eq!(frame_enter(&ctx, &mut state, vec![enter(none, false)], true), (true, 0));
+    }
+
+    #[test]
+    fn consent_is_bound_to_instruction_model_and_selection() {
+        let mut app = app();
+        app.assistant.instruction = "Shorten".into();
+        let first = consent_key(&mut app).unwrap_or_else(|e| panic!("{e}"));
+        app.assistant.instruction = "Shorten more".into();
+        assert_ne!(consent_key(&mut app).ok(), Some(first));
+        app.assistant.instruction = "Shorten".into();
+        assert_eq!(consent_key(&mut app).ok(), Some(first));
+        app.assistant.model = "another-model".into();
+        assert_ne!(consent_key(&mut app).ok(), Some(first));
+    }
+
+    #[test]
+    fn notice_sends_only_when_the_snapshot_is_unchanged() {
+        let mut app = app();
+        app.assistant.instruction = "Shorten".into();
+        open_notice(&mut app);
+        assert!(app.assistant.show_warning);
+        assert!(app.assistant.worker.is_none());
+        app.assistant.instruction = "Changed".into();
+        confirm_send(&mut app);
+        assert!(app.assistant.worker.is_none());
+        assert!(!app.assistant.show_warning);
+        assert!(app.assistant.consent_key.is_none());
+        assert!(app.assistant.status.as_ref().is_some_and(|n| n.error));
+        assert_eq!(app.assistant.instruction, "Changed");
+    }
+
+    #[test]
+    fn unchanged_snapshot_passes_the_consent_check_without_spawning() {
+        // A running worker makes `request` refuse after the consent check and before any thread starts,
+        // so no selection text leaves the process in this test.
+        let mut app = app();
+        app.assistant.instruction = "Shorten".into();
+        open_notice(&mut app);
+        let flag = running(&mut app);
+        confirm_send(&mut app);
+        assert!(!flag.load(Ordering::SeqCst));
+        assert!(app.assistant.worker.is_some());
+        assert!(app.assistant.status.as_ref().is_some_and(|n| n.text.contains("already running")));
+        assert_eq!(app.assistant.instruction, "Shorten");
+    }
+
+    #[test]
+    fn cancelling_the_notice_clears_consent_and_empty_instruction_never_opens_it() {
+        let mut app = app();
+        open_notice(&mut app);
+        assert!(!app.assistant.show_warning);
+        app.assistant.instruction = "Shorten".into();
+        open_notice(&mut app);
+        close_notice(&mut app);
+        assert!(!app.assistant.show_warning);
+        assert!(app.assistant.consent_key.is_none());
     }
 }

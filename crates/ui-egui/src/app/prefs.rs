@@ -20,6 +20,7 @@ impl SheetApp {
             (true, Some(egui::Theme::Light)) => egui::ThemePreference::Light,
             _ => self.ui.theme_preference(),
         };
+        crate::theme::set_skin(ctx, self.ui.skin);
         if ctx.options(|o| o.theme_preference) != preference {
             ctx.set_theme(preference);
             ctx.request_repaint();

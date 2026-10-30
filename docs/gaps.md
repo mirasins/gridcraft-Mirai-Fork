@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** minor (§22: Mirai selected-cell text proposal panel; upstream PivotTable Enable Show Details; formula/workbook analysis remain open) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-29 · **Change:** minor (§22: Mirai spreadsheet change proposals with preview, one undo step and overwrite warning; formula and workbook analysis remain open) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -169,9 +169,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   function API. **Estimate:** 25–40 h plus an owner decision.
 
 ### 22. AI features (F)
-- Mirai now offers reviewed plain-text rewrites for selected ordinary cells through the official
-  Claude Code CLI, with per-request consent and one-step undo. Natural-language formulas, workbook
-  analysis, charts and broader cell/formula assistance remain missing; agent control via MCP is
+- Mirai offers reviewed proposals for selected cells through the official Claude Code CLI, with
+  per-request consent and one-step undo. Only the selection is sent. Proposals can be plain text
+  rewrites, or cell inputs (values and `=` formulas, up to 256 cells) and an explicitly requested new
+  sheet, shown in a preview that warns about overwrites. Natural-language formula generation,
+  workbook analysis, charts and broader formula assistance remain missing; agent control via MCP is
   already strong. **Remaining estimate:** 25–45 h; see [writing-assistant.md](writing-assistant.md).
 
 ### 23. Mobile (platform)
@@ -185,6 +187,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | §22: Mirai spreadsheet change proposals (cell inputs up to 256 cells, optional requested new sheet), previewed and applied as one undo step; stale proposals rejected; formula and workbook analysis remain open |
 | 2026-10-26 | minor | §22: first Mirai selected-cell text rewrite panel with per-request consent, stale-context checks and undoable literal apply; formula and workbook analysis remain open |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |

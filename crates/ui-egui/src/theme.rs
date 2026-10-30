@@ -19,6 +19,71 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use egui::epaint::text::Blob;
 use egui::{Color32, FontData, FontDefinitions, FontFamily, FontId, Stroke, Visuals};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// The interface skin: a palette family that combines with the light, dark or system mode.
+/// `Classic` is GridCraft's own palette; `Mirai` is an original violet palette (no vendor assets
+/// or colours). The sheet stays white in both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Skin {
+    #[default]
+    Classic,
+    Mirai,
+}
+
+impl Skin {
+    pub const ALL: [Skin; 2] = [Skin::Classic, Skin::Mirai];
+
+    /// The stable identifier used by commands and saved preferences.
+    pub fn code(self) -> &'static str {
+        match self {
+            Skin::Classic => "classic",
+            Skin::Mirai => "mirai",
+        }
+    }
+
+    /// The name shown in menus.
+    pub fn label(self) -> &'static str {
+        match self {
+            Skin::Classic => "GridCraft",
+            Skin::Mirai => "Mirai Theme",
+        }
+    }
+
+    pub fn parse(code: &str) -> Option<Skin> {
+        let code = code.trim();
+        Skin::ALL.into_iter().find(|s| s.code().eq_ignore_ascii_case(code))
+    }
+}
+
+/// Reads a saved skin; an unknown or malformed value reads as the default skin.
+pub fn lenient_skin<'de, D: Deserializer<'de>>(d: D) -> Result<Skin, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Code(String),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Raw::deserialize(d)? {
+        Raw::Code(code) => Skin::parse(&code).unwrap_or_default(),
+        Raw::Other(_) => Skin::default(),
+    })
+}
+
+/// The skin the context's visuals were installed with (see [`install_visuals`]).
+pub fn skin(ctx: &egui::Context) -> Skin {
+    ctx.data(|d| d.get_temp::<Skin>(egui::Id::unique("gridcraft.interface_skin"))).unwrap_or_default()
+}
+
+/// Switches the interface skin on a running context; the visuals are reinstalled only on a change.
+pub fn set_skin(ctx: &egui::Context, skin: Skin) {
+    if self::skin(ctx) != skin {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("gridcraft.interface_skin"), skin));
+        install_visuals(ctx, skin);
+        ctx.request_repaint();
+    }
+}
 
 mod font_fallback;
 mod font_setup;
@@ -247,8 +312,17 @@ impl Tokens {
         }
     }
 
+    /// The palette of a skin in one mode. `Classic` is the plain palette above.
+    pub fn for_skin(dark: bool, skin: Skin) -> Tokens {
+        let t = Tokens::palette(dark);
+        match skin {
+            Skin::Classic => t,
+            Skin::Mirai => mirai(t),
+        }
+    }
+
     pub fn get(ctx: &egui::Context) -> Tokens {
-        if ctx.global_style().visuals.dark_mode { Tokens::dark() } else { Tokens::light() }
+        Tokens::for_skin(ctx.global_style().visuals.dark_mode, skin(ctx))
     }
 
     /// One colour of the category palette.
@@ -278,12 +352,53 @@ pub fn contrast(a: Color32, b: Color32) -> f32 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
-/// Installs light and dark token visuals in both theme slots, keeps the 2-3 px widget and 8-10 px window/menu corner radii from 0.36, and sets spacing, text styles and the active theme.
-pub fn apply(ctx: &egui::Context, dark: bool) {
-    // Install both palettes before System can switch between the style slots.
+/// The Mirai Theme: violet chrome on the same token slots. The sheet and syntax keep the classic
+/// values; the light orange category icon is darkened slightly for contrast on the pressed surface.
+fn mirai(t: Tokens) -> Tokens {
+    let dark = t.dark;
+    let c = |d: u32, l: u32| rgb(if dark { d } else { l });
+    let accent = if dark { Color32::from_rgba_unmultiplied(0xA7, 0x8B, 0xFA, 0x24) } else { Color32::from_rgba_unmultiplied(0x6D, 0x28, 0xD9, 0x1C) };
+    let [blue, green, orange, red, purple, teal, amber, slate] = t.cat;
+    Tokens {
+        window: c(0x1D1829, 0xF3F0FA),
+        ribbon: c(0x262036, 0xFFFFFF),
+        ribbon_border: c(0x3A3150, 0xDCD5EA),
+        text: c(0xEEEAF7, 0x2A2140),
+        text_dim: c(0xBDB4D0, 0x5E5478),
+        text_disabled: c(0x776D8E, 0xA9A1BF),
+        accent: c(0xA78BFA, 0x6D28D9),
+        accent_dark: c(0x8B5CF6, 0x5B21B6),
+        accent_soft: c(0x3A2D5C, 0xE8DEFB),
+        hover: c(0x332B47, 0xE9E3F5),
+        pressed: c(0x41385A, 0xDDD3EE),
+        separator: c(0x3A3150, 0xDCD5EA),
+        desk: c(0x141020, 0xDDD6EA),
+        header_bg: c(0x28213A, 0xF6F3FB),
+        header_text: c(0xC9C0E0, 0x4B4266),
+        header_line: c(0x3A3150, 0xD6CFE6),
+        header_sel_bg: c(0x3A2D5C, 0xE8DEFB),
+        header_sel_text: c(0xDCD0FF, 0x4C1D95),
+        header_all_bg: c(0x463A62, 0xD9CCF2),
+        sel_fill: accent,
+        sel_border: rgb(0x6D28D9),
+        input_bg: c(0x161122, 0xFFFFFF),
+        input_border: c(0x4B3F6E, 0xB9AFCF),
+        tab_bar: c(0x1D1829, 0xECE7F5),
+        tab_active: c(0x2F2748, 0xFFFFFF),
+        status_bar: c(0x231D31, 0xE9E4F3),
+        menu_bg: c(0x262036, 0xFFFFFF),
+        on_accent: c(0x1A1030, 0xFFFFFF),
+        // The classic light orange misses the 3:1 icon contrast target on Mirai's pressed surface.
+        cat: [blue, green, if dark { orange } else { rgb(0xB84E12) }, red, purple, teal, amber, slate],
+        ..t
+    }
+}
+
+/// Installs the skin's visuals in both theme slots, so System can switch between them.
+fn install_visuals(ctx: &egui::Context, skin: Skin) {
     for theme in [egui::Theme::Light, egui::Theme::Dark] {
         let dark = theme == egui::Theme::Dark;
-        let t = if dark { Tokens::dark() } else { Tokens::light() };
+        let t = Tokens::for_skin(dark, skin);
         let mut v = if dark { Visuals::dark() } else { Visuals::light() };
         v.panel_fill = t.window;
         v.window_fill = t.menu_bg;
@@ -308,6 +423,11 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
         v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: t.shadow };
         ctx.set_visuals_of(theme, v);
     }
+}
+
+/// Installs the visuals of the current skin in both theme slots, keeps the 2-3 px widget and 8-10 px window/menu corner radii from 0.36, and sets spacing, text styles and the active theme.
+pub fn apply(ctx: &egui::Context, dark: bool) {
+    install_visuals(ctx, skin(ctx));
     ctx.options_mut(|o| o.fallback_theme = egui::Theme::Light);
     ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
     ctx.all_styles_mut(|s| {
@@ -407,15 +527,62 @@ mod contrast_tests {
     #[test]
     fn token_pairs_meet_wcag_contrast_in_both_themes() {
         let mut failures = Vec::new();
-        for t in [Tokens::light(), Tokens::dark()] {
-            for (name, fg, bg, min) in pairs(&t) {
-                let ratio = contrast(fg, bg);
-                if ratio < min {
-                    failures.push(format!("{} theme: {name} is {ratio:.2}:1, needs {min}:1", if t.dark { "dark" } else { "light" }));
+        for skin in Skin::ALL {
+            for dark in [false, true] {
+                let t = Tokens::for_skin(dark, skin);
+                for (name, fg, bg, min) in pairs(&t) {
+                    let ratio = contrast(fg, bg);
+                    if ratio < min {
+                        let mode = if dark { "dark" } else { "light" };
+                        failures.push(format!("{} {mode} theme: {name} is {ratio:.2}:1, needs {min}:1", skin.code()));
+                    }
                 }
             }
         }
         assert!(failures.is_empty(), "contrast failures:\n{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn skin_saved_codes_round_trip_and_unknown_reads_as_default() {
+        for skin in Skin::ALL {
+            let saved = serde_json::json!({ "skin": skin.code() });
+            let back: Skin = serde_json::from_value(saved["skin"].clone()).unwrap_or_default();
+            assert_eq!(back, skin);
+        }
+        assert_eq!(Skin::parse(" MIRAI "), Some(Skin::Mirai));
+        assert_eq!(Skin::parse("neon"), None);
+        #[derive(serde::Deserialize)]
+        struct Saved {
+            #[serde(deserialize_with = "lenient_skin")]
+            skin: Skin,
+        }
+        let read = |v: serde_json::Value| serde_json::from_value::<Saved>(v).map(|s| s.skin).ok();
+        assert_eq!(read(serde_json::json!({"skin": "neon"})), Some(Skin::Classic));
+        assert_eq!(read(serde_json::json!({"skin": 7})), Some(Skin::Classic));
+        assert_eq!(read(serde_json::json!({"skin": "mirai"})), Some(Skin::Mirai));
+    }
+
+    #[test]
+    fn ui_state_persists_skin_and_legacy_or_malformed_values_default_safely() {
+        let ui = crate::UiState { dark: true, skin: Skin::Mirai, ..Default::default() };
+
+        let saved = serde_json::to_value(&ui).unwrap();
+        assert_eq!(saved["skin"], "mirai");
+        let restored: crate::UiState = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.skin, Skin::Mirai);
+        assert!(restored.dark, "loading the skin must preserve the other saved preferences");
+
+        let legacy: crate::UiState = serde_json::from_value(serde_json::json!({"dark": true})).unwrap();
+        assert_eq!(legacy.skin, Skin::Classic, "old preference files omit the skin");
+        assert!(legacy.dark);
+
+        for invalid in [serde_json::json!("neon"), serde_json::json!(7), serde_json::Value::Null, serde_json::json!([])] {
+            let mut malformed = serde_json::json!({"dark": true, "skin": "mirai"});
+            malformed["skin"] = invalid;
+            let restored: crate::UiState = serde_json::from_value(malformed).unwrap();
+            assert_eq!(restored.skin, Skin::Classic);
+            assert!(restored.dark, "a malformed skin must not reset unrelated preferences");
+        }
     }
 
     #[test]

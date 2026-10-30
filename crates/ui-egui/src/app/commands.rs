@@ -162,6 +162,14 @@ impl SheetApp {
                 }
                 Ok(json!({"mode": self.ui.theme_mode()}))
             }
+            "view.themeSkin" => {
+                let skin = p.get("skin").and_then(Json::as_str).and_then(crate::theme::Skin::parse);
+                let Some(skin) = skin else {
+                    return Some(Err("skin must be classic or mirai".into()));
+                };
+                self.ui.skin = skin;
+                Ok(json!({"skin": skin.code()}))
+            }
             "view.animations" => {
                 self.ui.animations = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.animations);
                 Ok(json!({"on": self.ui.animations}))

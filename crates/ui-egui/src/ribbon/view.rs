@@ -107,18 +107,33 @@ pub(super) fn view(app: &mut SheetApp, ui: &mut Ui) {
             "dark" => "Dark",
             _ => "Light",
         };
-        craft_ui::ComboBox::from_id_salt("display_theme")
-            .selected_text(lang.tr(label))
-            .width(88.0)
-            .show_ui(ui, |ui| {
-                for (value, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
-                    if ui.selectable_label(mode == value, lang.tr(label)).clicked() {
-                        act(app, "view.theme", json!({"mode": value}));
+        ui.horizontal(|ui| {
+            craft_ui::ComboBox::from_id_salt("display_theme")
+                .selected_text(lang.tr(label))
+                .width(88.0)
+                .show_ui(ui, |ui| {
+                    for (value, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
+                        if ui.selectable_label(mode == value, lang.tr(label)).clicked() {
+                            act(app, "view.theme", json!({"mode": value}));
+                        }
                     }
-                }
-            })
-            .response
-            .labelled_by(label_response.id);
+                })
+                .response
+                .labelled_by(label_response.id);
+            let skin = app.ui.skin;
+            craft_ui::ComboBox::from_id_salt("ui_skin")
+                .selected_text(lang.tr(skin.label()))
+                .width(110.0)
+                .show_ui(ui, |ui| {
+                    for s in theme::Skin::ALL {
+                        if ui.selectable_label(s == skin, lang.tr(s.label())).clicked() {
+                            act(app, "view.themeSkin", json!({"skin": s.code()}));
+                        }
+                    }
+                })
+                .response
+                .labelled_by(label_response.id);
+        });
         let mut animations = app.ui.animations;
         let hint = lang.tr("Glide the selection outline to the cell you move to instead of jumping there");
         if ui.checkbox(&mut animations, lang.tr("Animations")).on_hover_text(hint).changed() {

@@ -371,9 +371,101 @@ fn response_bounds_total_text_and_sizes() {
 }
 
 #[test]
+fn grid_proposal_parses_and_stays_compatible() {
+    let legacy = success(r#"{"suggestions":[{"index":0,"text":"a"}],"explanation":"e"}"#);
+    let parsed = parse_response(&legacy, 1);
+    assert_eq!(parsed.as_ref().map(|r| r.grid.is_none()), Ok(true));
+
+    let null_grid = success(r#"{"suggestions":[],"explanation":"e","grid":null}"#);
+    assert_eq!(parse_response(&null_grid, 1).map(|r| r.grid), Ok(None));
+
+    let current = success(
+        r#"{"suggestions":[],"explanation":"e","grid":{"sheet_name":null,"cells":[{"cell":"A1","input":"Total"},{"cell":"B2","input":"=SUM(A1:A9)"}]}}"#,
+    );
+    let grid = parse_response(&current, 0).ok().and_then(|r| r.grid);
+    assert_eq!(grid.as_ref().map(|g| g.cells.len()), Some(2));
+    assert_eq!(grid.as_ref().and_then(|g| g.sheet_name.clone()), None);
+
+    let new_sheet = success(r#"{"suggestions":[],"explanation":"e","grid":{"sheet_name":"Ventas 2026","cells":[]}}"#);
+    let parsed = parse_response(&new_sheet, 0);
+    assert_eq!(parsed.as_ref().ok().and_then(|r| r.grid.as_ref()).and_then(|g| g.sheet_name.clone()), Some("Ventas 2026".to_owned()));
+
+    let serialized = serde_json::to_string(&crate::Response { suggestions: vec![], explanation: "e".into(), grid: None }).unwrap_or_default();
+    assert!(!serialized.contains("grid"));
+    assert!(crate::protocol::OUTPUT_SCHEMA.contains(r#""required":["suggestions","explanation","grid"]"#));
+}
+
+#[test]
+fn grid_proposal_rejects_invalid_shapes() {
+    let bad = [
+        // missing grid fields and unknown fields
+        r#"{"suggestions":[],"explanation":"","grid":{"cells":[{"cell":"A1"}]}}"#,
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":null,"cells":[],"extra":1}}"#,
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":null,"cells":[{"cell":"A1","input":"x","style":1}]}}"#,
+        // empty proposal changes nothing
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":null,"cells":[]}}"#,
+        // addresses: relative, lowercase, zero row, leading zeros, out of range, too long
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":null,"cells":[{"cell":"$A$1","input":"x"}]}}"#,
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":null,"cells":[{"cell":"a1","input":"x"}]}}"#,
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":null,"cells":[{"cell":"A0","input":"x"}]}}"#,
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":null,"cells":[{"cell":"A01","input":"x"}]}}"#,
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":null,"cells":[{"cell":"XFE1","input":"x"}]}}"#,
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":null,"cells":[{"cell":"A1048577","input":"x"}]}}"#,
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":null,"cells":[{"cell":"A1 B2","input":"x"}]}}"#,
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":null,"cells":[{"cell":"ABCD1","input":"x"}]}}"#,
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":null,"cells":[{"cell":"Sheet1!A1","input":"x"}]}}"#,
+        // duplicates
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":null,"cells":[{"cell":"A1","input":"x"},{"cell":"A1","input":"y"}]}}"#,
+        // unsafe input characters
+        "{\"suggestions\":[],\"explanation\":\"\",\"grid\":{\"sheet_name\":null,\"cells\":[{\"cell\":\"A1\",\"input\":\"a\\u0007b\"}]}}",
+        "{\"suggestions\":[],\"explanation\":\"\",\"grid\":{\"sheet_name\":null,\"cells\":[{\"cell\":\"A1\",\"input\":\"a\\uFFFCb\"}]}}",
+        "{\"suggestions\":[],\"explanation\":\"\",\"grid\":{\"sheet_name\":null,\"cells\":[{\"cell\":\"A1\",\"input\":\"a\\u2028b\"}]}}",
+        // sheet names: blank, too long, control, forbidden characters
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":"   ","cells":[]}}"#,
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":"Hoja/1","cells":[]}}"#,
+        r#"{"suggestions":[],"explanation":"","grid":{"sheet_name":"a:b","cells":[]}}"#,
+        "{\"suggestions\":[],\"explanation\":\"\",\"grid\":{\"sheet_name\":\"a\\tb\",\"cells\":[]}}",
+    ];
+    for fixture in bad {
+        assert_eq!(parse_response(&success(fixture), 1).map(|_| ()), Err(Error::InvalidResponse), "{fixture}");
+    }
+
+    let long_name = "n".repeat(crate::MAX_SHEET_NAME_CHARS + 1);
+    let too_long_name = success(&format!(r#"{{"suggestions":[],"explanation":"","grid":{{"sheet_name":"{long_name}","cells":[]}}}}"#));
+    assert_eq!(parse_response(&too_long_name, 1).map(|_| ()), Err(Error::InvalidResponse));
+}
+
+#[test]
+fn grid_proposal_enforces_cell_count_and_byte_limits() {
+    let cells: Vec<String> = (1..=crate::MAX_GRID_CELLS + 1).map(|row| format!(r#"{{"cell":"A{row}","input":"x"}}"#)).collect();
+    let too_many = success(&format!(r#"{{"suggestions":[],"explanation":"","grid":{{"sheet_name":null,"cells":[{}]}}}}"#, cells.join(",")));
+    assert_eq!(parse_response(&too_many, 1).map(|_| ()), Err(Error::InvalidResponse));
+
+    let at_limit: Vec<String> = (1..=crate::MAX_GRID_CELLS).map(|row| format!(r#"{{"cell":"A{row}","input":"x"}}"#)).collect();
+    let exact = success(&format!(r#"{{"suggestions":[],"explanation":"","grid":{{"sheet_name":null,"cells":[{}]}}}}"#, at_limit.join(",")));
+    assert_eq!(parse_response(&exact, 1).map(|r| r.grid.map(|g| g.cells.len())), Ok(Some(crate::MAX_GRID_CELLS)));
+
+    let big = "x".repeat(crate::MAX_GRID_BYTES);
+    let over_bytes =
+        success(&format!(r#"{{"suggestions":[],"explanation":"","grid":{{"sheet_name":null,"cells":[{{"cell":"A1","input":"{big}"}}]}}}}"#));
+    assert_eq!(parse_response(&over_bytes, 1).map(|_| ()), Err(Error::InvalidResponse));
+}
+
+#[test]
+fn grid_proposal_debug_hides_text() {
+    let grid = crate::GridProposal {
+        sheet_name: Some("Secreto".into()),
+        cells: vec![crate::GridCell { cell: "A1".into(), input: "palabra secreta".into() }],
+    };
+    let debug = format!("{grid:?}");
+    assert!(!debug.contains("palabra secreta"));
+    assert!(!debug.contains("Secreto"));
+}
+
+#[test]
 fn response_debug_hides_text() {
     let parsed = parse_response(&success(r#"{"suggestions":[{"index":0,"text":"secret words"}],"explanation":"e"}"#), 1);
-    let debug = format!("{:?}", parsed.unwrap_or_else(|_| crate::Response { suggestions: vec![], explanation: String::new() }));
+    let debug = format!("{:?}", parsed.unwrap_or_else(|_| crate::Response { suggestions: vec![], explanation: String::new(), grid: None }));
     assert!(!debug.contains("secret words"));
 }
 

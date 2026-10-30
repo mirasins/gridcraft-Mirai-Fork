@@ -58,6 +58,21 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             .response
             .labelled_by(label.id);
         ui.end_row();
+        let label = ui.label(lang.tr("Interface theme"));
+        let skin = app.ui.skin;
+        craft_ui::ComboBox::from_id_salt("backstage_skin")
+            .width(160.0)
+            .selected_text(lang.tr(skin.label()))
+            .show_ui(ui, |ui| {
+                for s in crate::theme::Skin::ALL {
+                    if ui.selectable_label(s == skin, lang.tr(s.label())).clicked() {
+                        app.run_or_alert("view.themeSkin", json!({"skin": s.code()}));
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
+        ui.end_row();
         let label = ui.label(lang.tr("Interface language"));
         craft_ui::ComboBox::from_id_salt("backstage_language")
             .width(160.0)

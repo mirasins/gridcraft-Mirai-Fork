@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-28 · **Change:** minor (Mirai selected-cell text assistant; upstream AutoSum selection behavior, macro engine and `macro.*` commands, macro interface on the Automate tab; formulas/workbook analysis remain open) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-29 · **Change:** minor (Mirai spreadsheet change proposals: cell inputs and optional explicitly requested new sheet, previewed and applied as one undo step; upstream AutoSum selection behavior, macro engine and `macro.*` commands, macro interface on the Automate tab; formulas/workbook analysis remain open) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -67,7 +67,7 @@ collaboration, mobile, AI).
 | Hardware (multi-core calc, GPU, pen, multi-window) | ~40% | 25–40 | [hardware-parity.md](docs/hardware-parity.md) |
 | Platforms | ~80% (no iOS/Android; ahead on Linux, BSD, RISC-V) | 30–60 | [target-app-parity.md](docs/target-app-parity.md#platforms) |
 | Ecosystem / add-ins | ~10% (VBA out of scope; own scripts, MCP, CLI) | 25–40 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
-| AI features | ~20% (agent control strong; selected-cell Mirai text assistant) | 25–45 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
+| AI features | ~20% (agent control strong; selected-cell Mirai text and cell/sheet proposals) | 25–45 | [target-app-parity.md](docs/target-app-parity.md#ecosystem-and-ai) |
 | **Total** | **~50%** | **~700–1,100** | |
 
 ## Features
@@ -133,7 +133,9 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 ## Progress log
 
-- 2026-10-26: M7: first Mirai panel for selected ordinary cells, with explicit per-request consent, local official Claude Code transport, background/cancellable requests, review-before-apply and one-step undo. Engine snapshots are limited to 256 plain cells/64 KiB; formulas, pictures, merges, tables, spills and protected sheets are refused; model output is literal text, never formulas or commands. Transport (34), engine (18) and UI (8) focused tests, workspace Clippy, WASM, layers/assets/parity/keytips pass; screenshot checked. Full suite has one isolated UI `header_autofit::table_filter_autofit_works_through_command_and_header_double_click` failure (`heading overlaps filter` at 50% zoom), reproduced alone and in the suite; the test's source was untouched. No live account request.
+- 2026-10-29: Mirai spreadsheet proposals: the assistant can propose up to 256 cell changes (absolute A1 addresses, plain values or `=` formulas) and, only when explicitly asked, a new sheet. Preview lists every change and warns on overwrites; applied as one undo step via `assistant.applyGrid`; stale proposals are rejected. Only the selection is sent to Claude; proposals may change cells outside it. Limits: 64 KiB of addresses and inputs; formula, merged, picture, spilled and protected-sheet targets are refused. No live-account request was run.
+
+ for selected ordinary cells, with explicit per-request consent, local official Claude Code transport, background/cancellable requests, review-before-apply and one-step undo. Engine snapshots are limited to 256 plain cells/64 KiB; formulas, pictures, merges, tables, spills and protected sheets are refused; model output is literal text, never formulas or commands. Transport (34), engine (18) and UI (8) focused tests, workspace Clippy, WASM, layers/assets/parity/keytips pass; screenshot checked. Full suite has one isolated UI `header_autofit::table_filter_autofit_works_through_command_and_header_double_click` failure (`heading overlaps filter` at 50% zoom), reproduced alone and in the suite; the test's source was untouched. No live account request.
 
 
 | Date | What landed |
@@ -247,6 +249,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | M7: Mirai spreadsheet change proposals (up to 256 cells, optional requested new sheet), previewed and applied as one undo step; stale proposals rejected. |
 | 2026-10-26 | minor | M7: first selected-cell Mirai writing assistant; standalone official-Claude transport, explicit consent, bounded revision-checked literal text apply and one undo step. |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-24 | minor | Macro interface on the Automate tab; progress log row |

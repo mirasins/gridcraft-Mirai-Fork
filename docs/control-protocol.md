@@ -105,6 +105,11 @@ System follows live OS appearance changes and falls back to Light when the platf
 The saved choice remains System; new users still start in Light. The legacy
 `view.darkMode` command and `ui.set {dark}` select a fixed Light or Dark theme.
 
+Use `{command: "view.themeSkin", params: {skin: "mirai"}}` to choose the interface skin:
+`"classic"` (GridCraft's palette, the default) or `"mirai"` (Mirai Theme, an original violet
+palette). The skin combines with System, Light or Dark, is saved in `ui.json` as `skin`, and an
+unknown value reads as `"classic"`. The sheet stays white in both skins.
+
 `{command: "view.animations", params: {on: false}}` turns motion in the UI off (the selection
 outline then jumps to a new selection instead of gliding there); without `on` it toggles. It is
 the View ▸ Animations checkbox, saved with the other UI preferences and on by default.

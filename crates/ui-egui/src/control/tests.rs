@@ -89,6 +89,23 @@ fn language_command_docs_list_every_language() {
         assert!(docs.contains(&format!("\"{}\"", l.code())), "app.language.set docs miss {:?}: {docs}", l.code());
     }
 }
+
+#[test]
+fn interface_skin_command_changes_and_persists_the_preference() {
+    let mut app = test_app();
+    let result = app.run("view.themeSkin", json!({"skin": " MIRAI "})).unwrap();
+    assert_eq!(result, json!({"skin": "mirai"}));
+    assert_eq!(app.ui.skin, crate::theme::Skin::Mirai);
+
+    let saved = serde_json::to_value(&app.ui).unwrap();
+    assert_eq!(saved["skin"], "mirai");
+    let restored: crate::UiState = serde_json::from_value(saved).unwrap();
+    assert_eq!(restored.skin, crate::theme::Skin::Mirai);
+
+    assert!(app.run("view.themeSkin", json!({"skin": "neon"})).is_err());
+    assert_eq!(app.ui.skin, crate::theme::Skin::Mirai, "refusing an unknown skin keeps the active choice");
+}
+
 /// One headless UI pass. A test has no renderer to apply the font-atlas delta, so dropping
 /// it is intentional (0.37 panics when a `TexturesDelta` is dropped unapplied).
 fn ui_pass(ctx: &egui::Context, raw: egui::RawInput, f: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {

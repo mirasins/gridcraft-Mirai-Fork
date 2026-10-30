@@ -79,8 +79,10 @@ impl SheetApp {
         }
         if self.prepared_fonts {
             ctx.set_fonts(theme::pinned_font_definitions());
+            theme::set_skin(ctx, self.ui.skin);
             theme::apply(ctx, self.ui.dark);
         } else {
+            theme::set_skin(ctx, self.ui.skin);
             SheetApp::setup_context_for_language(ctx, self.ui.dark, self.ui.language);
         }
         self.fonts_set = true;

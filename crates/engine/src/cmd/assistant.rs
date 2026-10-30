@@ -51,6 +51,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             apply
         ),
+        cmd!(
+            "assistant.applyGrid",
+            "Apply Mirai Spreadsheet Changes",
+            [],
+            None,
+            "{context: snapshot, grid: {sheet_name: string|null, cells: [{cell, input}]}}; optional new sheet, one undo step",
+            has_doc,
+            apply_grid
+        ),
     ]
 }
 
@@ -82,6 +91,101 @@ struct Change {
     text: String,
     #[serde(default)]
     markdown: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GridPlan {
+    sheet_name: Option<String>,
+    cells: Vec<GridCell>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GridCell {
+    cell: String,
+    input: String,
+}
+
+fn apply_grid(s: &mut Session, p: &Json) -> Result<Json> {
+    const CMD: &str = "assistant.applyGrid";
+    let context = p.get("context").filter(|c| c.is_object()).ok_or_else(|| bad(CMD, "missing context"))?;
+    let grid = p.get("grid").filter(|c| c.is_object()).ok_or_else(|| bad(CMD, "missing grid"))?;
+    let changes = match p.get("changes") {
+        None => &[][..],
+        Some(Json::Array(changes)) => changes.as_slice(),
+        _ => return Err(bad(CMD, "changes must be an array")),
+    };
+    check_shape(context, changes)?;
+    only_keys(grid, &["sheet_name", "cells"], "grid")?;
+    let cells = grid.get("cells").and_then(Json::as_array).ok_or_else(|| bad(CMD, "missing cells"))?;
+    if cells.len().saturating_add(changes.len()) > MAX_CELLS {
+        return Err(refuse(format!("the limit is {MAX_CELLS} cells")));
+    }
+    if grid.get("sheet_name").and_then(Json::as_str).is_some_and(|n| n.len() > MAX_SHEET_NAME_BYTES) {
+        return Err(refuse("sheet name is too long"));
+    }
+    let mut bytes = 0usize;
+    for cell in cells {
+        only_keys(cell, &["cell", "input"], "cell")?;
+        str_within(cell, "cell", MAX_ADDRESS_BYTES, "cell address")?;
+        let input = cell.get("input").and_then(Json::as_str).ok_or_else(|| bad(CMD, "missing cell input"))?;
+        bytes = bytes.saturating_add(input.len());
+        if bytes > MAX_TEXT_BYTES || input.chars().any(|c| c == '\u{FFFC}' || (c.is_control() && !matches!(c, '\n' | '\r' | '\t'))) {
+            return Err(refuse("cell input is too large or contains unsupported characters"));
+        }
+    }
+    let snap: Snapshot = serde_json::from_value(context.clone()).map_err(|e| bad(CMD, format!("bad context: {e}")))?;
+    let plan: GridPlan = serde_json::from_value(grid.clone()).map_err(|e| bad(CMD, format!("bad grid: {e}")))?;
+    verify(s, &snap)?;
+    let mut seen = BTreeSet::new();
+    let mut literal = Vec::with_capacity(changes.len());
+    for raw in changes {
+        let change: Change = serde_json::from_value(raw.clone()).map_err(|e| bad(CMD, format!("bad change: {e}")))?;
+        let target = snap.targets.get(change.index).ok_or_else(|| bad(CMD, "change target is outside the snapshot"))?;
+        if !seen.insert(target.cell.clone()) {
+            return Err(bad(CMD, "duplicate change target"));
+        }
+        check_text(&change.text)?;
+        literal.push((target.cell.clone(), change.text));
+    }
+    let mut grid_cells = BTreeSet::new();
+    for cell in &plan.cells {
+        let at = CellRef::parse(&cell.cell).filter(|c| c.is_valid() && c.a1() == cell.cell).ok_or_else(|| bad(CMD, "invalid cell address"))?;
+        if !grid_cells.insert(at) {
+            return Err(bad(CMD, "duplicate cell address"));
+        }
+        if plan.sheet_name.is_none() && seen.contains(&cell.cell) {
+            return Err(bad(CMD, "cell is changed twice"));
+        }
+        if plan.sheet_name.is_none() {
+            let sh = s.doc()?.wb.sheet(snap.sheet).ok_or(EngineError::NoDocument)?;
+            if sh.cell_pictures.contains_key(&at) || sh.merge_at(at).is_some() || sh.spill_anchor(at).is_some() || sh.spill_ranges.contains_key(&at) {
+                return Err(refuse(format!("{} contains an object, merged cell or spilled array", cell.cell)));
+            }
+        }
+    }
+    if let Some(name) = &plan.sheet_name {
+        s.doc()?.wb.check_sheet_name(name, None).map_err(EngineError::Other)?;
+    }
+    if !plan.cells.is_empty() || plan.sheet_name.is_some() || !literal.is_empty() {
+        s.grouped(GROUP_LABEL, |s| {
+            for (cell, text) in &literal {
+                s.execute("range.setValues", json!({"sheet": snap.sheet, "range": cell, "values": [[text]], "parse": false}))?;
+            }
+            let sheet = if let Some(name) = &plan.sheet_name {
+                s.execute("home.insertSheet", json!({"name": name}))?;
+                s.doc()?.wb.active_sheet()
+            } else {
+                snap.sheet
+            };
+            for cell in &plan.cells {
+                s.execute("cell.set", json!({"sheet": sheet, "cell": cell.cell, "input": cell.input}))?;
+            }
+            Ok(())
+        })?;
+    }
+    Ok(json!({"applied": plan.cells.len() + literal.len(), "created_sheet": plan.sheet_name}))
 }
 
 fn refuse(msg: impl Into<String>) -> EngineError {
