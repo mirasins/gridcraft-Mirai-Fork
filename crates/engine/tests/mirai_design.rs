@@ -55,3 +55,53 @@ fn stale_context_refuses_design() {
     let design = json!({"rowHeights": [{"rows": "1:1", "points": 20.0}]});
     assert!(s.execute("assistant.applyDesign", json!({"context": context, "design": design})).is_err());
 }
+
+#[test]
+fn hex_colours_in_style_patches_apply_as_one_undo_step() {
+    // The model writes colours as #RRGGBB; the typed style takes its colour enum. Regression for
+    // "unknown variant `#7F7F7F`, expected one of `Auto`, `Rgb`, `Theme`".
+    let mut s = session();
+    let context = s.execute("assistant.context", json!({})).unwrap();
+    let design = json!({"styles": [{"range": "A1:B2", "style": {
+        "font": {"bold": true, "color": "#1F4E78"},
+        "fill": {"pattern": "Solid", "fg": "#DCE6F1"},
+        "borders": {"bottom": {"style": "Thin", "color": "#7F7F7F"}}
+    }}]});
+    s.execute("assistant.applyGrid", json!({"context": context, "design": design})).unwrap();
+    let a1 = s.execute("cell.get", json!({"cell": "A1"})).unwrap();
+    assert_eq!(a1["style"]["font"]["bold"], json!(true));
+    assert_eq!(a1["style"]["font"]["color"], json!({"Rgb": 0x1F4E78}));
+    assert_eq!(a1["style"]["fill"]["pattern"], json!("Solid"));
+    assert_eq!(a1["style"]["fill"]["fg"], json!({"Rgb": 0xDCE6F1}));
+    assert_eq!(a1["style"]["borders"]["bottom"]["style"], json!("Thin"));
+    assert_eq!(a1["style"]["borders"]["bottom"]["color"], json!({"Rgb": 0x7F7F7F}));
+    s.execute("edit.undo", json!({})).unwrap();
+    let a1 = s.execute("cell.get", json!({"cell": "A1"})).unwrap();
+    assert_eq!(a1["style"]["font"]["color"], json!("Auto"));
+}
+
+#[test]
+fn auto_colours_and_a_plain_fill_string_apply() {
+    let mut s = session();
+    let context = s.execute("assistant.context", json!({})).unwrap();
+    let design = json!({"styles": [
+        {"range": "A1", "style": {"font": {"color": "auto"}}},
+        {"range": "A2", "style": {"fill": "#DCE6F1"}}
+    ]});
+    s.execute("assistant.applyGrid", json!({"context": context, "design": design})).unwrap();
+    let a1 = s.execute("cell.get", json!({"cell": "A1"})).unwrap();
+    assert_eq!(a1["style"]["font"]["color"], json!("Auto"));
+    let a2 = s.execute("cell.get", json!({"cell": "A2"})).unwrap();
+    assert_eq!(a2["style"]["fill"]["pattern"], json!("Solid"));
+    assert_eq!(a2["style"]["fill"]["fg"], json!({"Rgb": 0xDCE6F1}));
+}
+
+#[test]
+fn an_unrecognised_colour_is_refused_without_changes() {
+    let mut s = session();
+    let context = s.execute("assistant.context", json!({})).unwrap();
+    let design = json!({"styles": [{"range": "A1", "style": {"font": {"color": "bright red"}}}]});
+    assert!(s.execute("assistant.applyGrid", json!({"context": context, "design": design})).is_err());
+    let a1 = s.execute("cell.get", json!({"cell": "A1"})).unwrap();
+    assert_eq!(a1["style"]["font"]["color"], json!("Auto"));
+}

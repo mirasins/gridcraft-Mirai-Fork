@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
-use gridcraft_model::Sheet;
+use gridcraft_model::{Color, Sheet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
@@ -137,7 +137,8 @@ fn apply_grid(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "assistant.applyGrid";
     let context = p.get("context").filter(|c| c.is_object()).ok_or_else(|| bad(CMD, "missing context"))?;
     let grid = p.get("grid").filter(|c| c.is_object());
-    let design = p.get("design").filter(|c| c.is_object());
+    let design_owned = p.get("design").filter(|c| c.is_object()).map(normalize_design);
+    let design = design_owned.as_ref();
     let changes = match p.get("changes") {
         None => &[][..],
         Some(Json::Array(changes)) => changes.as_slice(),
@@ -563,6 +564,68 @@ fn snake_case_keys(v: &Json) -> Json {
                 .collect(),
         ),
         other => other.clone(),
+    }
+}
+
+/// A style patch from the model carries colours as `#RRGGBB` strings (or "auto"), the natural
+/// form for text; the typed style takes a colour enum. This rewrites just the colour-typed fields
+/// of a design payload (font colour, fill fg/bg, border colours) into the enum form, and expands a
+/// plain colour string as a solid fill. Everything else passes through untouched, and an
+/// unrecognised colour still fails validation with its own message.
+fn normalize_design(design: &Json) -> Json {
+    let mut out = design.clone();
+    let Some(styles) = out.get_mut("styles").and_then(Json::as_array_mut) else { return out };
+    for item in styles {
+        if let Some(style) = item.get_mut("style").filter(|v| v.is_object()) {
+            *style = normalize_style_patch(style);
+        }
+    }
+    out
+}
+
+fn normalize_style_patch(patch: &Json) -> Json {
+    let Some(obj) = patch.as_object() else { return patch.clone() };
+    let mut out = serde_json::Map::new();
+    for (key, value) in obj {
+        if key == "fill"
+            && let Some(text) = value.as_str()
+        {
+            out.insert(key.clone(), plain_fill(text));
+            continue;
+        }
+        if matches!(key.as_str(), "color" | "fg" | "bg")
+            && let Some(color) = plain_color(value)
+        {
+            out.insert(key.clone(), color);
+            continue;
+        }
+        if value.is_object() {
+            out.insert(key.clone(), normalize_style_patch(value));
+        } else {
+            out.insert(key.clone(), value.clone());
+        }
+    }
+    Json::Object(out)
+}
+
+/// A colour-typed field as the model writes it: `#RRGGBB`, or "auto"/"none" for no colour.
+/// `None` leaves the value untouched (validation reports it).
+fn plain_color(value: &Json) -> Option<Json> {
+    let text = value.as_str()?.trim();
+    if text.eq_ignore_ascii_case("auto") || text.eq_ignore_ascii_case("none") {
+        return Some(json!("Auto"));
+    }
+    match Color::from_hex(text) {
+        Some(Color::Rgb(v)) => Some(json!({"Rgb": v})),
+        _ => None,
+    }
+}
+
+/// A fill written as a plain colour string: a solid fill of that colour, or no fill at all.
+fn plain_fill(text: &str) -> Json {
+    match plain_color(&Json::String(text.to_owned())) {
+        Some(color) => json!({"pattern": "Solid", "fg": color}),
+        None => json!({"pattern": "None", "fg": "Auto"}),
     }
 }
 

@@ -32,7 +32,7 @@ The engine commands `assistant.context`, `assistant.apply` (text), `assistant.ap
 literal: leading `=`, `+`, `-` and `@` are refused, and replacing a numeric/date cell changes it to
 text, as the preview indicates. Spreadsheet proposals are limited to 256 cells and 64 KiB of addresses
 and inputs; addresses must be absolute A1 (for example `B12`), duplicates are refused, and a new sheet
-name is checked before anything changes. Design proposals are limited to 64 operations: cell-style patches,
+name is checked before anything changes. Design proposals are limited to 64 operations: cell-style patches (colours as #RRGGBB strings, “auto” for none; the engine normalizes them into its colour enum),
 column widths or AutoFit, row heights, and at most one table per proposal; style patches are validated
 against the active cell style. Selected formula, merged, picture and spilled cells and
 protected sheets are refused as context. Grid changes can write formulas but refuse merged, picture
@@ -58,6 +58,7 @@ returned proposal now parses. The full pane flow with a real account is still to
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Design colours: the model writes them as #RRGGBB (or “auto”); the engine now rewrites just the colour-typed patch fields into its colour enum before validating, and the prompt documents the patch format with exact spellings. Fixes “unknown variant `#7F7F7F`, expected Auto, Rgb, Theme”. Verified live: a real header-styling request returned #FFFFFF/#1F4E78/#7F7F7F and applied as one undo step. |
 | 2026-10-30 | minor | Fixed the truncated output schema (one missing closing brace since the design-proposal change) that made every live Claude Code request fail as an invalid response. Schema-validity regression test, a captured real-envelope fixture, and one synthetic formula request verified end to end with the signed-in account. |
 | 2026-10-29 | minor | On-sheet proposal preview: proposed cell inputs painted over the sheet (an isolated overlay; nothing is edited until applied), an “Apply?” banner, Enter applies and Esc cancels, and the chat keeps only a short summary. Stale proposals hide; cancelling never touches the workbook or the undo history. Offline tests only. |
 | 2026-10-29 | minor | Formula work: an optional bounded window of cells around the selection (default 15, at most 60 rows and columns away, 32 KiB, formulas as typed) is sent after the same confirmation; new `assistant.formulaContext` engine command, pane checkbox and notice line. Fixed contexts over selected numeric cells failing every apply as changed. Offline tests only. |
