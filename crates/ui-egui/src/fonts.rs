@@ -198,6 +198,18 @@ fn catalog_now() -> Option<&'static [Face]> {
     CATALOG.get().map(Vec::as_slice)
 }
 
+/// Installed family names, available after the background scan finishes.
+pub fn installed_families() -> &'static [String] {
+    static FAMILIES: OnceLock<Vec<String>> = OnceLock::new();
+    let Some(faces) = catalog_now() else { return &[] };
+    FAMILIES.get_or_init(|| {
+        let mut names: Vec<String> = faces.iter().map(|face| face.family.clone()).collect();
+        names.sort_by_cached_key(|name| name.to_lowercase());
+        names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+        names
+    })
+}
+
 /// Start cataloging the installed fonts on a background thread, so the first frame doesn't wait for
 /// it. A no-op on wasm and after the scan has started.
 pub fn start_scan() {
@@ -358,22 +370,18 @@ pub fn bind_family(fonts: &mut egui::FontDefinitions, family: &str) -> Vec<Strin
     bind_faces(fonts, family, &faces_of(family))
 }
 
-/// The role families currently bound to font data. `cell_family` consults this, so it never names a
-/// family egui hasn't been given.
-static BOUND: OnceLock<std::sync::RwLock<HashSet<String>>> = OnceLock::new();
-
-fn bound() -> &'static std::sync::RwLock<HashSet<String>> {
-    BOUND.get_or_init(|| std::sync::RwLock::new(HashSet::new()))
+thread_local! {
+    static BOUND: std::cell::RefCell<HashSet<String>> = std::cell::RefCell::new(HashSet::new());
 }
 
 /// Record the role families a freshly built [`egui::FontDefinitions`] bound.
 pub fn set_bound(keys: impl IntoIterator<Item = String>) {
-    *bound().write().unwrap_or_else(std::sync::PoisonError::into_inner) = keys.into_iter().collect();
+    BOUND.with(|b| *b.borrow_mut() = keys.into_iter().collect());
 }
 
 /// Is this exact role family bound to font data?
 pub fn is_bound(role: &str) -> bool {
-    bound().read().unwrap_or_else(std::sync::PoisonError::into_inner).contains(role)
+    BOUND.with(|b| b.borrow().contains(role))
 }
 
 /// Serializes tests that mutate the process-wide bound-family registry.
@@ -414,6 +422,21 @@ mod tests {
         assert!(is_bound(&k));
         set_bound([]);
         assert!(!is_bound(&k));
+    }
+
+    #[test]
+    fn bound_registry_does_not_leak_across_threads() {
+        // Regression: a process-global BOUND let one egui context inherit another's bound
+        // roles (e.g. `fnt:Calibri:nn` while its scan had not finished), and egui panicked
+        // with "No glyph in family ... Installed fonts: []". Each thread/context keeps its
+        // own registry.
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let k = role_key("Calibri", false, false);
+        set_bound([k.clone()]);
+        assert!(is_bound(&k));
+        let leaked = std::thread::spawn(move || is_bound(&k)).join().expect("thread");
+        assert!(!leaked, "a sibling thread must not see this thread's bound roles");
+        set_bound([]);
     }
 
     #[test]
