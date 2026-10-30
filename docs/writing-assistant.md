@@ -18,10 +18,11 @@ most 32 KiB of text, formulas as typed) can be sent too, after the same confirma
    Enter or Send again confirms. Shift+Enter inserts a line. Confirmation is required for every
    request and is never persisted as a blanket permission. A checkbox sends the cells around the
    selection too, for formula work; the notice says so when it is on.
-4. Review the preview before applying. Text proposals show original and proposed text. Spreadsheet
-   proposals list each cell address and its new input, with the destination sheet. A proposal may
-   change cells outside the selection; the preview warns that existing cells may be overwritten.
-   Dismiss it, or apply all changes with one Undo step (Ctrl+Z).
+4. Review the proposal on the sheet: the proposed cell inputs are painted over their cells, and
+   an “Apply?” banner sits over the grid. Enter keeps the changes; Esc cancels them; the banner has
+   Apply and Cancel buttons too. A proposal may change cells outside the selection; the banner says
+   so. The chat keeps only a short summary and the explanation. Dismissed proposals change nothing at
+   all; applied changes are one Undo step (Ctrl+Z).
 5. A proposal is rejected when the workbook revision or target text has changed since the context was
    taken; ask again for a new proposal.
 6. Cancel or New Conversation stops the request. Changing workbooks clears the panel's local state.
@@ -55,6 +56,7 @@ all new tests use fake local fixtures/processes.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | On-sheet proposal preview: proposed cell inputs painted over the sheet (an isolated overlay; nothing is edited until applied), an “Apply?” banner, Enter applies and Esc cancels, and the chat keeps only a short summary. Stale proposals hide; cancelling never touches the workbook or the undo history. Offline tests only. |
 | 2026-10-29 | minor | Formula work: an optional bounded window of cells around the selection (default 15, at most 60 rows and columns away, 32 KiB, formulas as typed) is sent after the same confirmation; new `assistant.formulaContext` engine command, pane checkbox and notice line. Fixed contexts over selected numeric cells failing every apply as changed. Offline tests only. |
 | 2026-10-29 | minor | Added the original Mirai logo, two-step Enter confirmation, and atomic mixed text and cell proposals; no live-account or real-IME check. |
 | 2026-10-29 | minor | Spreadsheet change proposals (cell inputs, explicit new sheet), previewed and applied as one undo step; 256-cell limit; stale proposals rejected; overwrite warning. |

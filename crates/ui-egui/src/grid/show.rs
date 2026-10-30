@@ -175,6 +175,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         app.selected_chart = None;
     }
     let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
+    super::assistant_overlay::paint(app, &painter.with_clip_rect(geo.cells), &geo, si, sh, &t);
     paint_overlays(OverlayInput {
         app,
         ui,
@@ -206,6 +207,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         crate::paper_view::paint_rulers(app, &painter, rect, &geo, &t);
     }
     show_grid_interactions(app, ui, &resp, &geo, sh, &wb);
+    crate::assistant_pane::preview_banner(app, ui, rect, si);
     let track_x = vertical_scroll_track(available, rect, rtl);
     // The track starts below the column headings and frozen rows; the bar's column beside them
     // takes its colour too instead of showing a light square in dark mode.

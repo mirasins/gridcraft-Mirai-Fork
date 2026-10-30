@@ -177,7 +177,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   formula generation over a bounded window of cells
   around the selection is included (the selection plus up to 60 rows and columns away, 32 KiB,
   formulas as typed); whole-workbook analysis, charts and broader formula assistance remain
-  missing; agent control via MCP is already strong. **Remaining estimate:** 20-40 h; see [writing-assistant.md](writing-assistant.md).
+  missing; agent control via MCP is already strong. Proposals are previewed on the sheet itself:
+  proposed inputs over their cells, an “Apply?” banner with Enter/Esc, a one-line summary in the chat. **Remaining estimate:** 20-40 h; see [writing-assistant.md](writing-assistant.md).
 
 ### 23. Mobile (platform)
 - No iOS, iPadOS or Android layout. **Estimate:** 30–60 h.
@@ -190,6 +191,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | §22: Mirai proposals preview on the sheet (proposed inputs painted over their cells, “Apply?” banner, Enter applies, Esc cancels); the chat keeps a one-line summary; cancelling touches nothing. |
 | 2026-10-29 | minor | §22: formula work over a bounded window of cells around the selection (`assistant.formulaContext`, pane checkbox, consent notice); fixed numeric selections failing every apply as changed. |
 | 2026-10-29 | minor | §22: Mirai spreadsheet change proposals (cell inputs up to 256 cells, optional requested new sheet), previewed and applied as one undo step; stale proposals rejected; formula and workbook analysis remain open |
 | 2026-10-26 | minor | §22: first Mirai selected-cell text rewrite panel with per-request consent, stale-context checks and undoable literal apply; formula and workbook analysis remain open |

@@ -13,10 +13,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, TryRecvError};
 use std::time::Duration;
 
-use egui::{RichText, Ui};
+use egui::{Rect, RichText, Ui};
 use gridcraft_assistant::{
     AuthState, Client, Error as AssistantError, MAX_INSTRUCTION_BYTES, MAX_MODEL_BYTES, MAX_TARGETS, MAX_TEXT_BYTES, Request, Response,
 };
+use gridcraft_engine::core::CellRef;
 use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
@@ -91,6 +92,17 @@ pub struct Row {
     pub proposed: String,
 }
 
+/// What the on-sheet preview shows: proposed inputs for cells on the sheet the proposal was
+/// made for, plus counts for work that cannot be drawn there. Derived once, when the proposal is
+/// built; nothing here edits the workbook.
+#[derive(Clone, Default)]
+struct PreviewData {
+    sheet_index: usize,
+    cells: Vec<(CellRef, String)>,
+    other_sheet: Option<(String, usize)>,
+    design_ops: usize,
+}
+
 #[derive(Clone)]
 struct Proposal {
     context: Context,
@@ -99,6 +111,7 @@ struct Proposal {
     grid: Option<Json>,
     design: Option<Json>,
     explanation: String,
+    preview: PreviewData,
 }
 
 /// Assistant state on [`SheetApp`]. Ephemeral: never saved with the preferences or the workbook.
@@ -219,6 +232,17 @@ fn sync(app: &mut SheetApp) {
 /// Per-frame work: checks the workbook and collects a finished answer. Call once per frame.
 pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
     sync(app);
+    // The on-sheet preview: Enter applies it and Esc cancels it. Only when no text input is
+    // capturing the keyboard and no send notice is open, so nothing else loses its keys.
+    if app.assistant.proposal.is_some() && app.assistant.worker.is_none() && !app.assistant.show_warning && !ctx.egui_wants_keyboard_input() {
+        let enter = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+        let escape = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        if enter {
+            let _ = apply(app);
+        } else if escape {
+            dismiss(app);
+        }
+    }
     let polled = match app.assistant.worker.as_ref() {
         Some(worker) => worker.rx.try_recv(),
         None => return,
@@ -262,8 +286,27 @@ fn finish(app: &mut SheetApp, answer: Answer) {
 
 /// Turns a validated answer into a preview. Answers that name cells outside the selection,
 /// repeat a cell, or use Markdown are refused; their text is never applied.
+/// Fills the preview from a grid proposal: cells on the original sheet become overlay cells;
+/// writes to another or a new sheet are counted and named.
+fn preview_of_grid(sheet_name: Option<&str>, cells: &[gridcraft_assistant::GridCell], preview: &mut PreviewData) {
+    match sheet_name {
+        Some(name) => preview.other_sheet = Some((name.to_owned(), cells.len())),
+        None => {
+            for cell in cells {
+                if let Some(at) = CellRef::parse(&cell.cell).filter(|at| at.is_valid() && at.a1() == cell.cell) {
+                    preview.cells.push((at, cell.input.clone()));
+                }
+            }
+        }
+    }
+}
+
 fn build_proposal(context: Context, response: Response) -> Result<Proposal, String> {
     let mut seen = BTreeSet::new();
+    let mut preview = PreviewData {
+        sheet_index: context.json.get("sheet").and_then(Json::as_u64).and_then(|n| usize::try_from(n).ok()).unwrap_or(usize::MAX),
+        ..Default::default()
+    };
     let mut rows = Vec::new();
     let mut changes = Vec::new();
     for suggestion in &response.suggestions {
@@ -290,12 +333,16 @@ fn build_proposal(context: Context, response: Response) -> Result<Proposal, Stri
         }
         rows.push(Row { label: target.label.clone(), original: target.original.clone(), proposed: suggestion.text.clone() });
         changes.push(json!({"index": target.index, "text": suggestion.text, "markdown": false}));
+        if let Some(at) = cell.and_then(|c| CellRef::parse(c).filter(|at| at.is_valid() && at.a1() == c)) {
+            preview.cells.push((at, suggestion.text.clone()));
+        }
     }
     let grid = if let Some(grid) = response.grid {
         let destination = grid.sheet_name.as_deref().map(|name| format!("New sheet: {name}")).unwrap_or_else(|| {
             let name = context.json.get("sheet_name").and_then(Json::as_str).unwrap_or("original sheet");
             format!("Sheet: {name} (existing cells may be overwritten)")
         });
+        preview_of_grid(grid.sheet_name.as_deref(), &grid.cells, &mut preview);
         if grid.cells.is_empty() && grid.sheet_name.is_some() {
             rows.push(Row { label: destination.clone(), original: String::new(), proposed: "Create sheet".into() });
         }
@@ -311,6 +358,9 @@ fn build_proposal(context: Context, response: Response) -> Result<Proposal, Stri
         None
     };
     let design = response.design.clone();
+    if let Some(design) = &design {
+        preview.design_ops = design_op_count(design);
+    }
     if let Some(design) = &design {
         let destination = context.json.get("sheet_name").and_then(Json::as_str).unwrap_or("original sheet");
         if let Some(styles) = design.get("styles").and_then(Json::as_array) {
@@ -383,7 +433,8 @@ fn build_proposal(context: Context, response: Response) -> Result<Proposal, Stri
             rows.push(Row { label: format!("Sheet: {destination} — table {range}"), original: "No table".into(), proposed: name.into() });
         }
     }
-    Ok(Proposal { context, rows, changes, grid, design, explanation: response.explanation })
+    preview.cells.sort();
+    Ok(Proposal { context, rows, changes, grid, design, explanation: response.explanation, preview })
 }
 
 /// The sign-in guidance for a failed request. It names only official steps; no keys, no fallbacks.
@@ -581,6 +632,18 @@ fn request(app: &mut SheetApp, instruction: Option<&str>, model: Option<&str>, w
 
 /// Applies the shown suggestions as one engine command, only if the workbook is still the one
 /// they were made for. The proposal is used up either way.
+/// How many style, width, height, autofit or table operations a design payload carries.
+fn design_op_count(d: &Json) -> usize {
+    let mut n = 0;
+    for key in ["styles", "columnWidths", "autofitColumns", "autofitRows", "rowHeights"] {
+        n += d.get(key).and_then(Json::as_array).map_or(0, Vec::len);
+    }
+    if d.get("table").is_some() {
+        n += 1;
+    }
+    n
+}
+
 fn apply(app: &mut SheetApp) -> Result<Json, String> {
     if app.assistant.worker.is_some() {
         return Err("Wait for the request to finish first.".into());
@@ -597,29 +660,7 @@ fn apply(app: &mut SheetApp) -> Result<Json, String> {
         return Err("There are no changes to apply.".into());
     }
     let grid_cells = proposal.grid.as_ref().and_then(|g| g.get("cells")).and_then(Json::as_array).map_or(0, Vec::len);
-    let design_ops = proposal.design.as_ref().map_or(0, |d| {
-        // Count a few known operation arrays for the status message.
-        let mut n = 0;
-        if let Some(v) = d.get("styles").and_then(Json::as_array) {
-            n += v.len();
-        }
-        if let Some(v) = d.get("columnWidths").and_then(Json::as_array) {
-            n += v.len();
-        }
-        if let Some(v) = d.get("autofitColumns").and_then(Json::as_array) {
-            n += v.len();
-        }
-        if let Some(v) = d.get("autofitRows").and_then(Json::as_array) {
-            n += v.len();
-        }
-        if let Some(v) = d.get("rowHeights").and_then(Json::as_array) {
-            n += v.len();
-        }
-        if d.get("table").is_some() {
-            n += 1;
-        }
-        n
-    });
+    let design_ops = proposal.design.as_ref().map_or(0, design_op_count);
     let count = proposal.changes.len() + grid_cells + design_ops;
     let (command, params) = if proposal.grid.is_some() || proposal.design.is_some() {
         (
@@ -799,18 +840,12 @@ enum Action {
 fn preview(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     let mut action = None;
     if let Some(proposal) = app.assistant.proposal.as_ref() {
-        ui.label(RichText::new(format!("Suggested changes ({})", proposal.rows.len())).font(theme::ui_bold(13.0)));
+        ui.label(RichText::new("Proposed changes").font(theme::ui_bold(13.0)));
         if !proposal.explanation.is_empty() {
             ui.label(RichText::new(&proposal.explanation));
         }
-        for row in &proposal.rows {
-            egui::Frame::NONE.fill(t.window).corner_radius(4.0).inner_margin(6).show(ui, |ui| {
-                ui.label(RichText::new(&row.label).small().color(t.text_dim));
-                ui.label(RichText::new(format!("Original: {}", row.original)).small().color(t.text_dim));
-                ui.label(RichText::new(format!("Proposed: {}", row.proposed)));
-            });
-            ui.add_space(4.0);
-        }
+        ui.label(RichText::new(summary_line(proposal)).small().color(t.text_dim));
+        ui.label(RichText::new("The changes are previewed on the sheet. Enter applies them; Esc cancels.").small().color(t.text_dim));
         ui.horizontal(|ui| {
             if !proposal.rows.is_empty() && ui.button("Apply all").clicked() {
                 action = Some(Action::Apply);
@@ -827,6 +862,96 @@ fn preview(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
         Some(Action::Dismiss) => dismiss(app),
         None => {}
     }
+}
+
+/// One short line naming what the proposal changes, for the pane and the on-sheet banner.
+fn summary_line(proposal: &Proposal) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !proposal.preview.cells.is_empty() {
+        let names: Vec<String> = proposal.preview.cells.iter().map(|(at, _)| at.a1()).collect();
+        let shown = names.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+        let extra = names.len().saturating_sub(3);
+        parts.push(match extra {
+            0 => format!("{} cell change(s): {shown}", names.len()),
+            _ => format!("{} cell change(s): {shown} and {extra} more", names.len()),
+        });
+    }
+    if let Some((name, count)) = &proposal.preview.other_sheet {
+        parts.push(format!("{count} cell(s) on sheet \u{201C}{name}\u{201D}"));
+    }
+    if proposal.preview.design_ops > 0 {
+        parts.push(format!("{} style, width, height or table operation(s)", proposal.preview.design_ops));
+    }
+    if parts.is_empty() { "No changes".into() } else { parts.join(" \u{00B7} ") }
+}
+
+/// The live proposal's overlay data, when it belongs to the active workbook and revision. The
+/// overlay paints it; nothing here edits the workbook.
+pub(crate) struct PreviewCells<'a> {
+    pub(crate) sheet_index: usize,
+    pub(crate) cells: &'a [(CellRef, String)],
+}
+
+pub(crate) fn preview_cells(app: &SheetApp) -> Option<PreviewCells<'_>> {
+    let proposal = app.assistant.proposal.as_ref()?;
+    let (owner, revision) = active(app)?;
+    if owner != proposal.context.owner || revision != proposal.context.revision {
+        return None;
+    }
+    Some(PreviewCells { sheet_index: proposal.preview.sheet_index, cells: &proposal.preview.cells })
+}
+
+/// The on-sheet "Apply?" banner: the proposal summary with the Enter/Esc equivalents as buttons.
+/// Shown only while the proposal is live for the active workbook, sheet and revision.
+pub(crate) fn preview_banner(app: &mut SheetApp, ui: &Ui, grid_rect: Rect, sheet_index: usize) {
+    let Some(proposal) = app.assistant.proposal.as_ref() else { return };
+    if app.assistant.worker.is_some()
+        || sheet_index != proposal.preview.sheet_index
+        || active(app) != Some((proposal.context.owner, proposal.context.revision))
+    {
+        return;
+    }
+    let summary = summary_line(proposal);
+    let mut action = None;
+    egui::Area::new(egui::Id::unique("mirai_preview_banner"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(grid_rect.left_top() + egui::vec2(12.0, 8.0))
+        .interactable(true)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::window(ui.style()).show(ui, |ui| {
+                ui.label(RichText::new("Mirai \u{00B7} Apply?").strong());
+                ui.label(RichText::new(&summary).small());
+                ui.label(RichText::new("Enter keeps the changes \u{00B7} Esc reverts").small());
+                ui.horizontal(|ui| {
+                    if ui.button("Apply").clicked() {
+                        action = Some(Action::Apply);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        action = Some(Action::Dismiss);
+                    }
+                });
+            });
+        });
+    match action {
+        Some(Action::Apply) => {
+            let _ = apply(app);
+        }
+        Some(Action::Dismiss) => dismiss(app),
+        None => {}
+    }
+}
+
+/// Builds a proposal for the current selection from a synthetic response: the offline tests and
+/// the snapshot example. Nothing is sent and nothing is applied.
+#[doc(hidden)]
+pub fn propose_for_test(app: &mut SheetApp, response: Response) -> Result<(), String> {
+    let (owner, revision) = active(app).ok_or("Open a workbook first.")?;
+    let raw = app.run("assistant.context", json!({}))?;
+    let context = parse_context(&raw, owner, revision)?;
+    let proposal = build_proposal(context, response)?;
+    app.assistant.owner = Some(owner);
+    app.assistant.proposal = Some(proposal);
+    Ok(())
 }
 
 fn composer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
@@ -1263,5 +1388,139 @@ mod tests {
         close_notice(&mut app);
         assert!(!app.assistant.show_warning);
         assert!(app.assistant.consent_key.is_none());
+    }
+
+    /// A table with one selected numeric cell, like a real formula request.
+    fn sheet_with_selection(app: &mut SheetApp) {
+        let context = app.run("assistant.context", json!({})).unwrap();
+        app.run(
+            "assistant.applyGrid",
+            json!({"context": context, "grid": json!({"sheet_name": null, "cells": [
+                {"cell": "A1", "input": "Month"},
+                {"cell": "B1", "input": "Sales"},
+                {"cell": "A2", "input": "Jan"},
+                {"cell": "B2", "input": "1200"}
+            ]})}),
+        )
+        .unwrap();
+        app.run("selection.set", json!({"range": "B2"})).unwrap();
+    }
+
+    fn key_event(key: egui::Key) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }
+    }
+
+    #[test]
+    fn on_sheet_preview_applies_with_enter_and_cancels_with_esc() {
+        let mut app = app();
+        sheet_with_selection(&mut app);
+        let revision = active(&app).unwrap().1;
+        propose_for_test(&mut app, response(vec![Suggestion { index: 0, text: "1300".into(), markdown: false }])).unwrap();
+        // The overlay data names the proposed cell on the sheet the proposal was made for.
+        let preview = preview_cells(&app).unwrap();
+        assert_eq!(preview.sheet_index, 0);
+        assert_eq!(preview.cells, &[(gridcraft_engine::core::CellRef::new(1, 1), "1300".to_string())]);
+        // Esc cancels: nothing is applied, the revision does not move, no undo step appears.
+        let ctx = egui::Context::default();
+        ctx.input_mut(|i| i.events.push(key_event(egui::Key::Escape)));
+        poll(&mut app, &ctx);
+        assert!(app.assistant.proposal.is_none());
+        assert!(preview_cells(&app).is_none());
+        assert_eq!(active(&app).unwrap().1, revision);
+        // The only undo step is the test's own table setup: undo removes it and a second undo fails.
+        app.run("edit.undo", json!({})).unwrap();
+        assert!(app.run("cell.get", json!({"cell": "B2"})).unwrap()["value"].is_null());
+        assert!(app.run("edit.undo", json!({})).is_err(), "Esc must not touch the undo history");
+        // Enter applies the proposal as one undo step.
+        // The undo restored the selection the table was written with, so choose the cell again.
+        app.run("selection.set", json!({"range": "B2"})).unwrap();
+        propose_for_test(&mut app, response(vec![Suggestion { index: 0, text: "1300".into(), markdown: false }])).unwrap();
+        let ctx = egui::Context::default();
+        ctx.input_mut(|i| i.events.push(key_event(egui::Key::Enter)));
+        poll(&mut app, &ctx);
+        assert!(app.assistant.proposal.is_none());
+        assert_eq!(app.run("cell.get", json!({"cell": "B2"})).unwrap()["value"], "1300");
+        app.run("edit.undo", json!({})).unwrap();
+        // The table was already undone before, so this undo leaves B2 as it was before the apply.
+        assert!(app.run("cell.get", json!({"cell": "B2"})).unwrap()["value"].is_null());
+    }
+
+    #[test]
+    fn stale_preview_hides_and_a_later_edit_survives_cancel() {
+        let mut app = app();
+        sheet_with_selection(&mut app);
+        propose_for_test(&mut app, response(vec![Suggestion { index: 0, text: "1300".into(), markdown: false }])).unwrap();
+        assert!(preview_cells(&app).is_some());
+        // A later edit of another cell: the proposal goes stale and the overlay hides.
+        let context = app.run("assistant.context", json!({})).unwrap();
+        app.run("assistant.applyGrid", json!({"context": context, "grid": json!({"sheet_name": null, "cells": [{"cell": "A5", "input": "mine"}]})}))
+            .unwrap();
+        let ctx = egui::Context::default();
+        poll(&mut app, &ctx);
+        assert!(preview_cells(&app).is_none());
+        // Esc afterwards does nothing; the user's own edit stays and is one undo step.
+        let ctx = egui::Context::default();
+        ctx.input_mut(|i| i.events.push(key_event(egui::Key::Escape)));
+        poll(&mut app, &ctx);
+        assert_eq!(app.run("cell.get", json!({"cell": "A5"})).unwrap()["value"], "mine");
+        app.run("edit.undo", json!({})).unwrap();
+        assert_ne!(app.run("cell.get", json!({"cell": "A5"})).unwrap()["value"], "mine");
+    }
+
+    #[test]
+    fn preview_banner_renders_over_the_grid() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = app();
+        sheet_with_selection(&mut app);
+        app.run("ui.assistant", json!({"value": true})).unwrap();
+        propose_for_test(&mut app, response(vec![Suggestion { index: 0, text: "1300".into(), markdown: false }])).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 720.0)).build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(6);
+        h.get_by_label("Mirai · Apply?");
+        h.get_by_label("Enter keeps the changes · Esc reverts");
+        // The summary line itself appears in both the banner and the pane, so it is not
+        // asserted here (kittest refuses ambiguous labels); the unit tests cover its content.
+        // The chat keeps only the summary.
+        h.get_by_label("The changes are previewed on the sheet. Enter applies them; Esc cancels.");
+    }
+
+    #[test]
+    fn preview_cells_cover_suggestions_and_original_sheet_grid_writes() {
+        let mut app = app();
+        sheet_with_selection(&mut app);
+        let response = Response {
+            suggestions: vec![Suggestion { index: 0, text: "1300".into(), markdown: false }],
+            explanation: "Two edits.".into(),
+            grid: Some(gridcraft_assistant::GridProposal {
+                sheet_name: None,
+                cells: vec![gridcraft_assistant::GridCell { cell: "C2".into(), input: "=B2*2".into() }],
+            }),
+            design: None,
+        };
+        propose_for_test(&mut app, response).unwrap();
+        let preview = preview_cells(&app).unwrap();
+        let names: Vec<String> = preview.cells.iter().map(|(at, _)| at.a1()).collect();
+        assert_eq!(names, vec!["B2".to_string(), "C2".to_string()]);
+        assert!(preview.cells.iter().any(|(_, text)| text == "=B2*2"));
+        // A proposal for another sheet draws nothing on this one.
+        let response = Response {
+            suggestions: vec![],
+            explanation: "New sheet.".into(),
+            grid: Some(gridcraft_assistant::GridProposal {
+                sheet_name: Some("Plan".into()),
+                cells: vec![gridcraft_assistant::GridCell { cell: "A1".into(), input: "x".into() }],
+            }),
+            design: None,
+        };
+        propose_for_test(&mut app, response).unwrap();
+        let preview = preview_cells(&app).unwrap();
+        assert!(preview.cells.is_empty());
     }
 }

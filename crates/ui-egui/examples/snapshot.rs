@@ -2,7 +2,7 @@
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
 //!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
-//!  [--dialog 'name={json}'] [--hf-edit header|footer] out.png`
+//!  [--dialog 'name={json}'] [--hf-edit header|footer] [--mirai] out.png`
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -22,6 +22,7 @@ fn main() {
     let mut dialog: Option<String> = None;
     let mut language: Option<String> = None;
     let mut hf_edit: Option<String> = None;
+    let mut mirai = false;
     let mut out = "snapshot.png".to_string();
     let mut i = 0;
     while i < args.len() {
@@ -55,6 +56,9 @@ fn main() {
                 tab = args.get(i).cloned();
             }
             "--dark" => dark = true,
+            "--mirai" => {
+                mirai = true;
+            }
             "--pane" => {
                 i += 1;
                 pane = args.get(i).cloned();
@@ -128,6 +132,29 @@ fn main() {
                     app.ui.ribbon_tab = t;
                 }
                 app.grid.pane = pane;
+                if mirai {
+                    // A synthetic proposal over the current selection: opens the pane, shows the
+                    // on-sheet preview and its Apply? banner. No request, nothing applied.
+                    let _ = app.run("ui.assistant", json!({"value": true}));
+                    let raw = app.run("assistant.context", json!({})).expect("assistant context");
+                    let cell = raw["targets"][0]["cell"].as_str().unwrap_or("A1").to_owned();
+                    let original = raw["targets"][0]["original"].as_str().unwrap_or("").to_owned();
+                    let right =
+                        gridcraft_engine::core::CellRef::parse(&cell).and_then(|at| at.offset(0, 1)).map(|at| at.a1()).unwrap_or_else(|| "B1".into());
+                    let text = if original.is_empty() { "Reviewed draft".to_owned() } else { format!("{original} (revised)") };
+                    let response = gridcraft_assistant::Response {
+                        suggestions: vec![gridcraft_assistant::Suggestion { index: 0, text, markdown: false }],
+                        explanation: "A short reviewed draft, plus a neighbouring formula.".into(),
+                        grid: Some(gridcraft_assistant::GridProposal {
+                            sheet_name: None,
+                            cells: vec![gridcraft_assistant::GridCell { cell: right, input: "=LEN(B2)".into() }],
+                        }),
+                        design: None,
+                    };
+                    if let Err(e) = gridcraft_ui_egui::assistant_pane::propose_for_test(&mut app, response) {
+                        eprintln!("mirai preview: {e}");
+                    }
+                }
                 app.selected_chart = chart;
                 if let Some(d) = &dialog {
                     let (name, p) =
