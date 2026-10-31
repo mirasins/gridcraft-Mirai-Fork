@@ -40,6 +40,15 @@ fn rejects_invalid_design_without_writing() {
 }
 
 #[test]
+fn null_table_field_is_ignored() {
+    // The output schema allows `table` to be null; the engine must not treat that as "a table".
+    let mut s = session();
+    let context = s.execute("assistant.context", json!({})).unwrap();
+    let design = json!({"rowHeights": [{"rows": "1:1", "points": 20.0}], "table": null});
+    s.execute("assistant.applyGrid", json!({"context": context, "design": design})).unwrap();
+}
+
+#[test]
 fn apply_design_command_works() {
     let mut s = session();
     let context = s.execute("assistant.context", json!({})).unwrap();

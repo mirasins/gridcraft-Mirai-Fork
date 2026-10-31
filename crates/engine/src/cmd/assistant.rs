@@ -793,7 +793,7 @@ fn validate_design(s: &Session, design: &Json) -> Result<()> {
         }
     }
 
-    let table_items: Vec<&Json> = if let Some(t) = design.get("table") {
+    let table_items: Vec<&Json> = if let Some(t) = design.get("table").filter(|v| !v.is_null()) {
         vec![t]
     } else if let Some(arr) = design.get("tables").and_then(Json::as_array) {
         arr.iter().collect()
@@ -886,7 +886,7 @@ fn apply_design_ops(s: &mut Session, sheet: usize, design: &Json) -> Result<()> 
         }
     }
     // tables
-    let table_items: Vec<&Json> = if let Some(t) = design.get("table") {
+    let table_items: Vec<&Json> = if let Some(t) = design.get("table").filter(|v| !v.is_null()) {
         vec![t]
     } else if let Some(arr) = design.get("tables").and_then(Json::as_array) {
         arr.iter().collect()
@@ -936,7 +936,7 @@ fn design_ops_count(design: Option<&Json>) -> usize {
     if let Some(v) = design.get("rowHeights").and_then(Json::as_array) {
         n += v.len();
     }
-    if design.get("table").is_some() {
+    if design.get("table").is_some_and(|v| !v.is_null()) {
         n += 1;
     }
     if let Some(v) = design.get("tables").and_then(Json::as_array) {
