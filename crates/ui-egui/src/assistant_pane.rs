@@ -339,7 +339,16 @@ fn build_proposal(context: Context, response: Response) -> Result<Proposal, Stri
             preview.cells.push((at, suggestion.text.clone()));
         }
     }
-    let grid = if let Some(grid) = response.grid {
+    let grid = if let Some(mut grid) = response.grid {
+        // A model often echoes the current sheet's name instead of null. Treat that as "write to the
+        // current sheet", matching the engine, so the preview paints the cells instead of promising a
+        // new sheet that can never be created.
+        let current_sheet_name = context.json.get("sheet_name").and_then(Json::as_str);
+        if let Some(name) = grid.sheet_name.as_deref()
+            && current_sheet_name.is_some_and(|current| current.eq_ignore_ascii_case(name))
+        {
+            grid.sheet_name = None;
+        }
         let destination = grid.sheet_name.as_deref().map(|name| format!("New sheet: {name}")).unwrap_or_else(|| {
             let name = context.json.get("sheet_name").and_then(Json::as_str).unwrap_or("original sheet");
             format!("Sheet: {name} (existing cells may be overwritten)")
@@ -500,6 +509,23 @@ fn window_text(app: &mut SheetApp) -> Result<String, String> {
     Ok(out)
 }
 
+/// No cells to edit: the selection is only the cursor, on an empty cell. Matches the engine's rule
+/// for moving new data off occupied cells.
+fn no_selection(context: &Context) -> bool {
+    context.targets.len() <= 1 && context.targets.iter().all(|t| t.original.is_empty())
+}
+
+/// Where the sheet already holds data and where new data goes: addresses only, never content.
+fn layout_text(app: &mut SheetApp) -> Result<String, String> {
+    let area = app.run("assistant.freeArea", json!({}))?;
+    let used = area.get("used").and_then(Json::as_str).unwrap_or("nothing");
+    let empty = Vec::new();
+    let tables: Vec<&str> = area.get("tables").and_then(Json::as_array).unwrap_or(&empty).iter().filter_map(Json::as_str).collect();
+    let tables = if tables.is_empty() { "none".to_owned() } else { tables.join(", ") };
+    let free = area.get("free").and_then(Json::as_str).unwrap_or("A1");
+    Ok(format!("Sheet layout: used range {used}; tables {tables}; first free cell for new data {free}."))
+}
+
 /// Fingerprint of everything the user agrees to send: workbook, selection snapshot, model and
 /// instruction. Fails when the selection cannot be sent at all.
 fn consent_key(app: &mut SheetApp) -> Result<u64, String> {
@@ -594,9 +620,14 @@ fn request(app: &mut SheetApp, instruction: Option<&str>, model: Option<&str>, w
         instruction: text.clone(),
         targets: context.targets.iter().map(|t| t.original.clone()).collect(),
         structure: context.targets.iter().map(|t| t.label.clone()).collect(),
-        context: match include_window {
-            true => Some(window_text(app)?),
-            false => None,
+        context: {
+            // Only the cursor on an empty cell: tell the model where free space starts.
+            let layout = if no_selection(&context) { Some(layout_text(app)?) } else { None };
+            let window = if include_window { Some(window_text(app)?) } else { None };
+            match (layout, window) {
+                (Some(l), Some(w)) => Some(format!("{l} {w}")),
+                (l, w) => l.or(w),
+            }
         },
     };
     request.validate().map_err(|e| e.to_string())?;
@@ -673,8 +704,15 @@ fn apply(app: &mut SheetApp) -> Result<Json, String> {
         ("assistant.apply", json!({"context": proposal.context.json, "changes": proposal.changes}))
     };
     match app.run(command, params) {
-        Ok(_) => {
-            app.assistant.status = Some(note(false, format!("Applied {count} change(s). Undo with Ctrl+Z.")));
+        Ok(out) => {
+            let moved = out.get("relocated").and_then(|r| Some((r.get("from")?.as_str()?, r.get("to")?.as_str()?)));
+            let text = match moved {
+                Some((from, to)) => format!(
+                    "Applied {count} change(s). The new cells would have overwritten data you didn't select, so they start at {to} instead of {from}. Undo with Ctrl+Z."
+                ),
+                None => format!("Applied {count} change(s). Undo with Ctrl+Z."),
+            };
+            app.assistant.status = Some(note(false, text));
             Ok(json!({"applied": count}))
         }
         Err(error) => {
@@ -986,7 +1024,7 @@ fn composer(app: &mut SheetApp, ui: &mut Ui, t: &Tokens) {
     let mut cancel = false;
     if notice_open {
         egui::Window::new("Send to Claude Code?").collapsible(false).resizable(false).default_pos(egui::pos2(100.0, 100.0)).show(ui.ctx(), |ui| {
-            ui.label("The selected cells' text and your instruction will be sent to Claude Code, using your own sign-in.");
+            ui.label("The selected cells' text and your instruction will be sent to Claude Code, using your own sign-in. With no cells selected, where the sheet holds data (addresses only) is sent too.");
             if app.assistant.window {
                 ui.label("The cells around the selection on this sheet (up to 60 rows and columns away) are sent too, for formula work.");
             }

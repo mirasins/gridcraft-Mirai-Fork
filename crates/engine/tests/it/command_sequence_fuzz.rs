@@ -66,6 +66,7 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("formulas.calculationOptions", "manual and iterative calculation differ from a full recalc by design"),
     ("assistant.context", "requires a selected-cell snapshot; covered by dedicated assistant tests"),
     ("assistant.apply", "requires a validated context snapshot; covered by dedicated assistant tests"),
+    ("assistant.freeArea", "read-only layout query; covered by dedicated assistant tests"),
 ];
 
 // ---------------------------------------------------------------- deterministic randomness

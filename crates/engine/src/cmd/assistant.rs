@@ -78,6 +78,15 @@ pub fn specs() -> Vec<CommandSpec> {
             apply_design
         ),
         cmd!(
+            query "assistant.freeArea",
+            "Mirai Assistant Free Area",
+            [],
+            None,
+            "{} → {sheet, sheet_name, used: A1 range|null, tables: [A1 range], free: A1 cell}: where the active sheet holds data and the first free row below it (one blank row apart), addresses only",
+            has_doc,
+            free_area
+        ),
+        cmd!(
             query "assistant.formulaContext",
             "Mirai Assistant Formula Context",
             [],
@@ -137,8 +146,7 @@ fn apply_grid(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "assistant.applyGrid";
     let context = p.get("context").filter(|c| c.is_object()).ok_or_else(|| bad(CMD, "missing context"))?;
     let grid = p.get("grid").filter(|c| c.is_object());
-    let design_owned = p.get("design").filter(|c| c.is_object()).map(normalize_design);
-    let design = design_owned.as_ref();
+    let mut design_owned = p.get("design").filter(|c| c.is_object()).map(normalize_design);
     let changes = match p.get("changes") {
         None => &[][..],
         Some(Json::Array(changes)) => changes.as_slice(),
@@ -165,11 +173,22 @@ fn apply_grid(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
     }
-    if let Some(design) = design {
+    if let Some(design) = &design_owned {
         validate_design(s, design)?;
     }
     let snap: Snapshot = serde_json::from_value(context.clone()).map_err(|e| bad(CMD, format!("bad context: {e}")))?;
-    let plan: Option<GridPlan> = grid.map(|g| serde_json::from_value(g.clone()).map_err(|e| bad(CMD, format!("bad grid: {e}")))).transpose()?;
+    let mut plan: Option<GridPlan> = grid.map(|g| serde_json::from_value(g.clone()).map_err(|e| bad(CMD, format!("bad grid: {e}")))).transpose()?;
+    // A model often echoes the current sheet's name instead of `null` when it means "write to the
+    // current sheet". Creating a sheet with that name would fail with "That name is already taken",
+    // so treat an echo of the current sheet as "no new sheet" rather than a request to create one.
+    if let Some(plan) = plan.as_mut()
+        && let Some(name) = plan.sheet_name.clone()
+    {
+        let current = s.doc().ok().and_then(|d| d.wb.sheet(snap.sheet)).map(|sh| sh.name.clone());
+        if current.as_deref().is_some_and(|c| c.eq_ignore_ascii_case(&name)) {
+            plan.sheet_name = None;
+        }
+    }
     verify(s, &snap)?;
     let mut seen = BTreeSet::new();
     let mut literal = Vec::with_capacity(changes.len());
@@ -182,6 +201,17 @@ fn apply_grid(s: &mut Session, p: &Json) -> Result<Json> {
         check_text(&change.text)?;
         literal.push((target.cell.clone(), change.text));
     }
+    // Without a selection to edit, new data never lands on occupied cells: the block moves to
+    // free rows instead. A real selection means the user chose where Mirai works.
+    let relocated = match plan.as_mut().filter(|p| p.sheet_name.is_none() && !edits_selection(&snap)) {
+        Some(plan) => {
+            let sh = s.doc()?.wb.sheet(snap.sheet).ok_or(EngineError::NoDocument)?;
+            let selected: BTreeSet<CellRef> = snap.targets.iter().filter_map(|t| CellRef::parse(&t.cell)).collect();
+            relocate(sh, &selected, plan, design_owned.as_mut())?
+        }
+        None => None,
+    };
+    let design = design_owned.as_ref();
     if let Some(plan) = &plan {
         let mut grid_cells = BTreeSet::new();
         for cell in &plan.cells {
@@ -237,11 +267,156 @@ fn apply_grid(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let created_sheet = plan.as_ref().and_then(|p| p.sheet_name.clone());
     let applied = literal.len() + plan.as_ref().map_or(0, |p| p.cells.len()) + design_ops_count(design);
-    Ok(json!({"applied": applied, "created_sheet": created_sheet}))
+    let relocated = relocated.map(|(from, to)| json!({"from": from.a1(), "to": to.a1()}));
+    Ok(json!({"applied": applied, "created_sheet": created_sheet, "relocated": relocated}))
+}
+
+/// Whether the user selected cells for Mirai to edit: more than the cursor cell, or a cell
+/// with content. Only the cursor on an empty cell counts as "no selection".
+fn edits_selection(snap: &Snapshot) -> bool {
+    snap.targets.len() > 1 || snap.targets.iter().any(|t| !t.original.is_empty())
+}
+
+/// Whether the assistant must leave `at` alone: it holds a value, a table, a merged area, a
+/// spilled array or a picture, and the user didn't select it.
+fn occupied(sh: &Sheet, selected: &BTreeSet<CellRef>, at: CellRef) -> bool {
+    !selected.contains(&at)
+        && (!sh.input_text(at).is_empty()
+            || sh.table_at(at).is_some()
+            || sh.merge_at(at).is_some()
+            || sh.spill_anchor(at).is_some()
+            || sh.spill_ranges.contains_key(&at)
+            || sh.cell_pictures.contains_key(&at))
+}
+
+/// The last row anything occupies on the sheet: values, spills, tables, merges and pictures.
+fn last_used_row(sh: &Sheet) -> Option<u32> {
+    let tables = sh.tables.iter().map(|t| t.range.end.row);
+    let merges = sh.merges.iter().map(|m| m.end.row);
+    let pictures = sh.cell_pictures.keys().map(|c| c.row);
+    sh.used_range().map(|r| r.end.row).into_iter().chain(tables).chain(merges).chain(pictures).max()
+}
+
+/// When a grid block for the current sheet would write over occupied cells the user didn't
+/// select, moves the whole block below everything on the sheet, one blank row apart, in the
+/// same columns. References inside its formulas that point into the block follow it (like a
+/// cut and paste); references to the rest of the sheet stay. Styles, tables and row sizes that
+/// touch the block move with it. Returns the block's old range and new top-left cell.
+fn relocate(sh: &Sheet, selected: &BTreeSet<CellRef>, plan: &mut GridPlan, design: Option<&mut Json>) -> Result<Option<(RangeRef, CellRef)>> {
+    // Invalid addresses are refused by the checks that follow; nothing moves then.
+    let Some(cells) = plan.cells.iter().map(|c| CellRef::parse(&c.cell).filter(|at| at.is_valid())).collect::<Option<Vec<_>>>() else {
+        return Ok(None);
+    };
+    if !cells.iter().any(|at| occupied(sh, selected, *at)) {
+        return Ok(None);
+    }
+    let Some(block) = cells.iter().map(|at| RangeRef::new(*at, *at)).reduce(|a, b| a.union(&b)) else {
+        return Ok(None);
+    };
+    let top = last_used_row(sh).map_or(0, |row| row.saturating_add(2));
+    let height = block.end.row.saturating_sub(block.start.row);
+    if top.saturating_add(height) >= MAX_ROWS {
+        return Err(refuse("there is no free space below the sheet's data for the new cells; select where they should go"));
+    }
+    let to = CellRef::new(top, block.start.col);
+    let dr = i64::from(top) - i64::from(block.start.row);
+    let edit = gridcraft_formula::adjust::Edit::Move { from: block, to_row: to.row, to_col: to.col };
+    for (cell, at) in plan.cells.iter_mut().zip(&cells) {
+        cell.cell = at.offset_clamped(dr, 0).a1();
+        if let Some(body) = cell.input.strip_prefix('=')
+            && let Ok(e) = gridcraft_formula::parse(body)
+        {
+            cell.input = format!("={}", gridcraft_formula::print(&gridcraft_formula::adjust::adjust(e, &sh.name, &sh.name, &edit)));
+        }
+    }
+    if let Some(design) = design {
+        shift_design(design, block, dr);
+    }
+    Ok(Some((block, to)))
+}
+
+/// Moves the design ranges and row specs that touch `block` down by `dr` rows.
+fn shift_design(design: &mut Json, block: RangeRef, dr: i64) {
+    let shift_range = |v: &mut Json| {
+        if let Some(r) = v.as_str().and_then(RangeRef::parse).filter(|r| r.intersects(&block)) {
+            *v = json!(RangeRef::new(r.start.offset_clamped(dr, 0), r.end.offset_clamped(dr, 0)).a1());
+        }
+    };
+    if let Some(styles) = design.get_mut("styles").and_then(Json::as_array_mut) {
+        for item in styles {
+            if let Some(range) = item.get_mut("range") {
+                shift_range(range);
+            }
+        }
+    }
+    if let Some(range) = design.get_mut("table").and_then(|t| t.get_mut("range")) {
+        shift_range(range);
+    }
+    if let Some(tables) = design.get_mut("tables").and_then(Json::as_array_mut) {
+        for table in tables {
+            if let Some(range) = table.get_mut("range") {
+                shift_range(range);
+            }
+        }
+    }
+    if let Some(rows) = design.get_mut("autofitRows").and_then(Json::as_array_mut) {
+        for spec in rows {
+            if let Some(text) = spec.as_str() {
+                *spec = json!(shift_rows(text, block, dr));
+            }
+        }
+    }
+    if let Some(heights) = design.get_mut("rowHeights").and_then(Json::as_array_mut) {
+        for item in heights {
+            for key in ["rows", "row"] {
+                if let Some(spec) = item.get_mut(key)
+                    && let Some(text) = spec.as_str()
+                {
+                    *spec = json!(shift_rows(text, block, dr));
+                }
+            }
+        }
+    }
+}
+
+/// A row spec (`3`, `2:5`, comma lists) with the parts that touch `block`'s rows moved by `dr`.
+/// Sheet-prefixed specs and parts that aren't plain row numbers are kept as they are.
+fn shift_rows(spec: &str, block: RangeRef, dr: i64) -> String {
+    let spec = compact_lines(spec);
+    if spec.contains('!') {
+        return spec;
+    }
+    let (first, last) = (i64::from(block.start.row) + 1, i64::from(block.end.row) + 1);
+    spec.split(',')
+        .map(|part| {
+            let (a, b) = part.split_once(':').unwrap_or((part, part));
+            match (a.parse::<i64>(), b.parse::<i64>()) {
+                (Ok(a), Ok(b)) if a <= last && b >= first => {
+                    let (a, b) = (a.saturating_add(dr), b.saturating_add(dr));
+                    if part.contains(':') { format!("{a}:{b}") } else { a.to_string() }
+                }
+                _ => part.to_owned(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn apply_design(s: &mut Session, p: &Json) -> Result<Json> {
     apply_grid(s, p)
+}
+
+/// `assistant.freeArea`: addresses only, no cell content. New data the model writes to the
+/// current sheet belongs at `free`, below everything else; `assistant.applyGrid` moves it there
+/// anyway when it would land on occupied cells the user didn't select.
+fn free_area(s: &mut Session, _p: &Json) -> Result<Json> {
+    let d = s.doc()?;
+    let si = d.wb.active_sheet();
+    let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
+    let used = sh.used_range().map(|r| r.a1());
+    let tables: Vec<String> = sh.tables.iter().take(MAX_DESIGN_OPS).map(|t| t.range.a1()).collect();
+    let row = last_used_row(sh).map_or(0, |row| row.saturating_add(2)).min(MAX_ROWS - 1);
+    Ok(json!({"sheet": si, "sheet_name": sh.name, "used": used, "tables": tables, "free": CellRef::new(row, 0).a1()}))
 }
 
 fn refuse(msg: impl Into<String>) -> EngineError {

@@ -1,6 +1,6 @@
 # Mirai Assistant
 
-> **Last reviewed:** 2026-10-29 · **Last updated:** 2026-10-30 · **Change:** minor (fixed the truncated output schema that made every live request fail as invalid; one synthetic formula request verified end to end with the signed-in account) · **Validation:** offline transport, engine and panel tests; one live synthetic formula request.
+> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-10-30 · **Change:** minor (without a selection, new data goes below existing data instead of over it) · **Validation:** offline engine and panel tests; no live request for this change.
 
 Mirai is a right-hand panel in **Review › Mirai Assistant**. It proposes three kinds of changes:
 literal text replacements for selected ordinary cells, spreadsheet changes (cell inputs at absolute
@@ -39,6 +39,17 @@ protected sheets are refused as context. Grid changes can write formulas but ref
 and spilled cells. Programmatic requests still require `confirm: true`; no cloud
 request happens on opening the panel.
 
+**New data never overwrites existing data when nothing is selected.** With only the cursor on an
+empty cell, the request also tells Claude Code where the sheet holds data (the used range, table
+ranges and the first free cell, addresses only, no content), and the model is told to start new data
+there. If a proposal for the current sheet would still write onto a cell with a value, a table, a
+merged area, a spilled array or a picture, `assistant.applyGrid` moves the whole block below
+everything on the sheet, one blank row apart, in the same columns: references inside its formulas
+that point into the block follow it (like cut and paste), references to the existing data stay, and
+styles, tables and row sizes that touch the block move with it. The panel says where the cells went.
+When the user selected cells (a range, or a cell with content), Mirai writes where the instruction and
+the model say. `assistant.freeArea` reports the layout.
+
 ## Account and privacy
 
 The native client runs only the **official Claude Code CLI** with the user's own signed-in account
@@ -58,6 +69,7 @@ returned proposal now parses. The full pane flow with a real account is still to
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Without a selection to edit, grid proposals no longer land on existing data or tables: the request carries the sheet layout (addresses only) and `assistant.applyGrid` moves a colliding block below the used area, rewriting formula references into the block and shifting its styles, tables and row sizes; the result reports `relocated`. A real selection keeps the old behaviour. New `assistant.freeArea` query. Offline engine tests. |
 | 2026-10-30 | minor | Design colours: the model writes them as #RRGGBB (or “auto”); the engine now rewrites just the colour-typed patch fields into its colour enum before validating, and the prompt documents the patch format with exact spellings. Fixes “unknown variant `#7F7F7F`, expected Auto, Rgb, Theme”. Verified live: a real header-styling request returned #FFFFFF/#1F4E78/#7F7F7F and applied as one undo step. |
 | 2026-10-30 | minor | Fixed the truncated output schema (one missing closing brace since the design-proposal change) that made every live Claude Code request fail as an invalid response. Schema-validity regression test, a captured real-envelope fixture, and one synthetic formula request verified end to end with the signed-in account. |
 | 2026-10-29 | minor | On-sheet proposal preview: proposed cell inputs painted over the sheet (an isolated overlay; nothing is edited until applied), an “Apply?” banner, Enter applies and Esc cancels, and the chat keeps only a short summary. Stale proposals hide; cancelling never touches the workbook or the undo history. Offline tests only. |
