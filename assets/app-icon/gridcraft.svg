@@ -10,7 +10,7 @@
     <rect width="512" height="512" fill="#1f9d55"/>
     <g transform="rotate(-6 256 268)" stroke="#0b0b0c" stroke-linejoin="round" stroke-linecap="round">
       <!-- page with a folded top-right corner -->
-      <path d="M112 76 H336 L404 144 V440 H112 Z" fill="#efe9dc" stroke-width="14"/>
+      <path d="M112 76 H336 L404 144 V440 H112 Z" fill="#7541AE" stroke-width="14"/>
       <path d="M336 76 V144 H404" fill="none" stroke-width="12"/>
       <!-- title lines -->
       <path d="M146 106 H272 M146 130 H232" stroke-width="12"/>
