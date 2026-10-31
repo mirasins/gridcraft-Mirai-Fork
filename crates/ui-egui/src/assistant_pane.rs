@@ -1482,7 +1482,7 @@ mod tests {
         ctx.input_mut(|i| i.events.push(key_event(egui::Key::Enter)));
         poll(&mut app, &ctx);
         assert!(app.assistant.proposal.is_none());
-        assert_eq!(app.run("cell.get", json!({"cell": "B2"})).unwrap()["value"], "1300");
+        assert_eq!(app.run("cell.get", json!({"cell": "B2"})).unwrap()["value"], 1300.0, "a number stays a number");
         app.run("edit.undo", json!({})).unwrap();
         // The table was already undone before, so this undo leaves B2 as it was before the apply.
         assert!(app.run("cell.get", json!({"cell": "B2"})).unwrap()["value"].is_null());

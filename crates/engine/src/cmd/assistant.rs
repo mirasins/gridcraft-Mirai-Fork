@@ -46,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Mirai Assistant Context",
             [],
             None,
-            "{scope?: \"selection\"} → {document_id, revision, scope, sheet, sheet_name, targets: [{index, label, cell, original}]} (plain text cells only; at most 256 cells and 64 KiB of text)",
+            "{scope?: \"selection\"} → {document_id, revision, scope, sheet, sheet_name, targets: [{index, label, cell, original}]} (text, number and formula cells; at most 256 cells and 64 KiB of text)",
             has_doc,
             context
         ),
@@ -55,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Apply Mirai Assistant Changes",
             [],
             None,
-            "{context: <the whole snapshot from assistant.context>, changes: [{index, text, markdown?: false}]} (literal text only: a leading =, +, - or @ is refused; one undo step)",
+            "{context: <the whole snapshot from assistant.context>, changes: [{index, text, markdown?: false}]} (text starting with = is a formula and must parse; other text is literal and a leading +, - or @ is refused; one undo step)",
             has_doc,
             apply
         ),
@@ -198,8 +198,7 @@ fn apply_grid(s: &mut Session, p: &Json) -> Result<Json> {
         if !seen.insert(target.cell.clone()) {
             return Err(bad(CMD, "duplicate change target"));
         }
-        check_text(&change.text)?;
-        literal.push((target.cell.clone(), change.text));
+        literal.push((target.cell.clone(), checked_write(&change.text)?));
     }
     // Without a selection to edit, new data never lands on occupied cells: the block moves to
     // free rows instead. A real selection means the user chose where Mirai works.
@@ -241,8 +240,8 @@ fn apply_grid(s: &mut Session, p: &Json) -> Result<Json> {
     if has_ops {
         let design = design.cloned();
         s.grouped(GROUP_LABEL, |s| {
-            for (cell, text) in &literal {
-                s.execute("range.setValues", json!({"sheet": snap.sheet, "range": cell, "values": [[text]], "parse": false}))?;
+            for (cell, w) in &literal {
+                write(s, snap.sheet, cell, w)?;
             }
             let sheet = if let Some(plan) = &plan {
                 if let Some(name) = &plan.sheet_name {
@@ -461,7 +460,8 @@ fn snapshot(s: &Session) -> Result<Snapshot> {
             return Err(refuse(format!("the selected text is more than {MAX_TEXT_BYTES} bytes; select less")));
         }
         let cell = at.a1();
-        targets.push(Target { index, label: format!("cell {cell}"), cell, original });
+        let kind = if is_formula(sh, at) { "formula" } else { "cell" };
+        targets.push(Target { index, label: format!("{kind} {cell}"), cell, original });
     }
     Ok(Snapshot { document_id: d.uid, revision: d.revision, scope: "selection".into(), sheet: si, sheet_name: sh.name.clone(), targets })
 }
@@ -533,9 +533,7 @@ fn is_plain(text: &str) -> bool {
 
 /// Refuses cells the assistant can't rewrite as plain text without changing what they are.
 fn check_plain(sh: &Sheet, at: CellRef) -> Result<()> {
-    let why = if sh.cell(at).is_some_and(|c| c.formula.is_some()) {
-        "holds a formula"
-    } else if sh.cell_pictures.contains_key(&at) {
+    let why = if sh.cell_pictures.contains_key(&at) {
         "holds a picture"
     } else if sh.merge_at(at).is_some() {
         "is part of a merged cell"
@@ -544,7 +542,7 @@ fn check_plain(sh: &Sheet, at: CellRef) -> Result<()> {
     } else {
         return Ok(());
     };
-    Err(refuse(format!("{} {why}; the assistant changes plain text cells only in this version", at.a1())))
+    Err(refuse(format!("{} {why}; the assistant changes text, number and formula cells only in this version", at.a1())))
 }
 
 fn apply(s: &mut Session, p: &Json) -> Result<Json> {
@@ -563,7 +561,7 @@ fn apply(s: &mut Session, p: &Json) -> Result<Json> {
     verify(s, &snap)?;
 
     let mut used = BTreeSet::new();
-    let mut plan: Vec<(String, String)> = Vec::with_capacity(changes.len());
+    let mut plan: Vec<(String, Write)> = Vec::with_capacity(changes.len());
     for change in &changes {
         if change.markdown == Some(true) {
             return Err(refuse(MARKDOWN));
@@ -575,17 +573,16 @@ fn apply(s: &mut Session, p: &Json) -> Result<Json> {
         if !used.insert(change.index) {
             return Err(bad(CMD, format!("index {} appears more than once", change.index)));
         }
-        check_text(&change.text)?;
-        plan.push((target.cell.clone(), change.text.clone()));
+        plan.push((target.cell.clone(), checked_write(&change.text)?));
     }
 
     let sheet = snap.sheet;
     if !plan.is_empty() {
-        // Every check has passed. Each write is a literal `range.setValues` (no typed parsing), and
-        // a failure part-way rolls the whole group back.
+        // Every check has passed. Literal text goes in unparsed, formulas as typed, and a failure
+        // part-way rolls the whole group back.
         s.grouped(GROUP_LABEL, |s| {
-            for (cell, text) in &plan {
-                s.execute("range.setValues", json!({"sheet": sheet, "range": cell, "values": [[text]], "parse": false}))?;
+            for (cell, w) in &plan {
+                write(s, sheet, cell, w)?;
             }
             Ok(())
         })?;
@@ -661,9 +658,67 @@ fn str_within(v: &Json, key: &str, max: usize, what: &str) -> Result<()> {
 /// Bytes of a cell's stored text, read without copying it: the input text is this, or it with one
 /// leading apostrophe. Numbers, booleans and errors have short input text and count as zero.
 fn stored_text_len(sh: &Sheet, at: CellRef) -> usize {
+    // A formula's input is its formula text, not its computed value.
+    if is_formula(sh, at) {
+        return 0;
+    }
     match sh.value(at) {
         Value::Text(t) => t.len(),
         _ => 0,
+    }
+}
+
+fn is_formula(sh: &Sheet, at: CellRef) -> bool {
+    sh.cell(at).is_some_and(|c| c.formula.is_some())
+}
+
+/// One checked write to a selected cell: a formula (`=…`, parsed before anything changes), a
+/// value typed as a person would (number, percentage, date, TRUE/FALSE) or literal text.
+enum Write {
+    Formula(String),
+    Typed(String),
+    Literal(String),
+}
+
+/// A suggestion for a selected cell: text starting with `=` is a formula and must parse; text that
+/// reads as a number, date or boolean when typed is entered like typing, so sums keep counting it;
+/// anything else is literal text under the usual rules.
+fn checked_write(text: &str) -> Result<Write> {
+    let trimmed = text.trim_start();
+    if let Some(body) = trimmed.strip_prefix('=') {
+        if trimmed.len() > gridcraft_formula::MAX_FORMULA_LEN || trimmed.chars().any(|c| c == '\u{FFFC}' || c.is_control()) {
+            return Err(refuse("the formula is too long or holds a control character"));
+        }
+        gridcraft_formula::parse(body).map_err(|e| refuse(format!("`{}` isn't a valid formula: {e}", short_text(trimmed))))?;
+        return Ok(Write::Formula(trimmed.to_owned()));
+    }
+    // Dates and times stay text: their reading depends on the locale (05.04.2026).
+    let typed = gridcraft_core::parse::parse_input(trimmed, gridcraft_core::DateSystem::D1900);
+    // A leading zero (005, 0123) marks a code or an id, which stays text.
+    let date_like = typed.format.is_some_and(|f| f.chars().any(|c| matches!(c, 'd' | 'm' | 'y' | 'h' | 's')));
+    let code_like = trimmed.trim_start_matches(['+', '-']).as_bytes().get(..2).is_some_and(|b| matches!(b, [b'0', d] if d.is_ascii_digit()));
+    if matches!(typed.value, Value::Number(_) | Value::Bool(_)) && !date_like && !code_like && !trimmed.starts_with('@') {
+        return Ok(Write::Typed(trimmed.trim_end().to_owned()));
+    }
+    check_text(text)?;
+    Ok(Write::Literal(text.to_owned()))
+}
+
+/// The first characters of `text`, for an error message.
+fn short_text(text: &str) -> String {
+    let mut out: String = text.chars().take(40).collect();
+    if out.len() < text.len() {
+        out.push('…');
+    }
+    out
+}
+
+/// Writes one checked change: formulas through `cell.set` (parsed like typing), literal text
+/// through `range.setValues` without parsing.
+fn write(s: &mut Session, sheet: usize, cell: &str, w: &Write) -> Result<()> {
+    match w {
+        Write::Formula(f) | Write::Typed(f) => s.execute("cell.set", json!({"sheet": sheet, "cell": cell, "input": f})).map(|_| ()),
+        Write::Literal(t) => s.execute("range.setValues", json!({"sheet": sheet, "range": cell, "values": [[t]], "parse": false})).map(|_| ()),
     }
 }
 
@@ -1211,12 +1266,15 @@ mod tests {
     }
 
     #[test]
-    fn context_refuses_formula_picture_merge_and_protected_sheets() {
+    fn context_takes_formula_cells_and_refuses_picture_merge_and_protected_sheets() {
         let mut s = session();
         set(&mut s, "A1", "=1+1");
-        select(&mut s, "A1");
-        let err = s.execute("assistant.context", json!({})).unwrap_err().to_string();
-        assert!(err.contains("formula"), "{err}");
+        set(&mut s, "A2", "Total");
+        select(&mut s, "A1:A2");
+        let c = snap(&mut s);
+        assert_eq!(c["targets"][0]["label"], "formula A1");
+        assert_eq!(c["targets"][0]["original"], "=1+1");
+        assert_eq!(c["targets"][1]["label"], "cell A2");
 
         let mut s = session();
         set(&mut s, "A1", "x");
@@ -1307,17 +1365,17 @@ mod tests {
         assert!(apply_with(&mut s, c.clone(), dup).is_err());
         assert!(apply_with(&mut s, c.clone(), json!([{"index": 5, "text": "x"}])).is_err());
         assert!(apply_with(&mut s, c.clone(), json!([{"index": -1, "text": "x"}])).is_err());
-        assert!(apply_with(&mut s, c.clone(), json!([{"index": 0, "text": "fine"}, {"index": 1, "text": "=bad"}])).is_err());
+        assert!(apply_with(&mut s, c.clone(), json!([{"index": 0, "text": "fine"}, {"index": 1, "text": "=SUM("}])).is_err());
         assert_eq!(text_at(&s, "A1"), "Hi", "a refused apply writes nothing, not even its valid changes");
     }
 
     #[test]
-    fn formulas_and_markdown_are_refused() {
+    fn broken_formulas_signs_and_markdown_are_refused() {
         let mut s = session();
         set(&mut s, "A1", "Hi");
         select(&mut s, "A1");
         let c = snap(&mut s);
-        for text in ["=1+1", " =SUM(A1)", "+1", "-1", "@cmd", "\t=A1"] {
+        for text in ["=SUM(", "=1+", "+A1", "-B2", "@cmd", "=A1\u{7}"] {
             assert!(apply_with(&mut s, c.clone(), json!([{"index": 0, "text": text}])).is_err(), "{text}");
         }
         assert!(apply_with(&mut s, c.clone(), json!([{"index": 0, "text": "x", "markdown": true}])).is_err());
@@ -1424,5 +1482,57 @@ mod tests {
         c["targets"][0]["original"] = json!("x".repeat(MAX_TEXT_BYTES));
         assert!(apply_with(&mut s, c, json!([{"index": 0, "text": "Bye"}])).is_err(), "length can't match the stored text");
         assert_eq!(text_at(&s, "A1"), "Hi");
+    }
+
+    #[test]
+    fn selected_formulas_and_contents_are_adapted_together() {
+        let mut s = session();
+        set(&mut s, "A1", "10");
+        set(&mut s, "A2", "20");
+        set(&mut s, "A3", "30");
+        set(&mut s, "A4", "=SUM(A1:A2)");
+        set(&mut s, "B4", "Old label");
+        // Several cells, formulas and contents mixed: the formula misses a row.
+        select(&mut s, "A1:B4");
+        let c = snap(&mut s);
+        let index = |cell: &str| c["targets"].as_array().unwrap().iter().position(|t| t["cell"] == cell).unwrap();
+        assert_eq!(c["targets"][index("A4")]["label"], "formula A4");
+        let changes = json!([
+            {"index": index("A4"), "text": "=SUM(A1:A3)"},
+            {"index": index("B4"), "text": "Total"},
+            {"index": index("A3"), "text": "35"}
+        ]);
+        apply_with(&mut s, c, changes).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "A3"})).unwrap()["type"], "number", "a number stays a number");
+        assert_eq!(text_at(&s, "A4"), "=SUM(A1:A3)");
+        assert_eq!(text_at(&s, "B4"), "Total");
+        assert_eq!(s.execute("cell.get", json!({"cell": "A4"})).unwrap()["value"], 65.0, "the corrected formula is live");
+        // One undo step brings every cell back, the old formula included.
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(text_at(&s, "A4"), "=SUM(A1:A2)");
+        assert_eq!(text_at(&s, "B4"), "Old label");
+    }
+
+    #[test]
+    fn a_formula_cell_can_become_text_and_a_text_cell_a_formula() {
+        let mut s = session();
+        set(&mut s, "A1", "=1+1");
+        set(&mut s, "A2", "note");
+        select(&mut s, "A1:A2");
+        let c = snap(&mut s);
+        apply_with(&mut s, c, json!([{"index": 0, "text": "two"}, {"index": 1, "text": "=A1&\"!\""}])).unwrap();
+        assert_eq!(text_at(&s, "A1"), "two");
+        assert_eq!(text_at(&s, "A2"), "=A1&\"!\"");
+    }
+
+    #[test]
+    fn a_changed_formula_makes_the_snapshot_stale() {
+        let mut s = session();
+        set(&mut s, "A1", "=1+1");
+        select(&mut s, "A1");
+        let c = snap(&mut s);
+        set(&mut s, "A1", "=1+2");
+        assert!(apply_with(&mut s, c, json!([{"index": 0, "text": "=2+2"}])).is_err());
+        assert_eq!(text_at(&s, "A1"), "=1+2");
     }
 }

@@ -1,6 +1,6 @@
 # Mirai Assistant
 
-> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-10-30 · **Change:** minor (without a selection, new data goes below existing data instead of over it) · **Validation:** offline engine and panel tests; no live request for this change.
+> **Last reviewed:** 2026-10-30 · **Last updated:** 2026-10-30 · **Change:** minor (selected formula cells can be adapted; without a selection, new data goes below existing data) · **Validation:** offline engine and panel tests; no live request for these changes.
 
 Mirai is a right-hand panel in **Review › Mirai Assistant**. It proposes three kinds of changes:
 literal text replacements for selected ordinary cells, spreadsheet changes (cell inputs at absolute
@@ -28,13 +28,17 @@ most 32 KiB of text, formulas as typed) can be sent too, after the same confirma
 6. Cancel or New Conversation stops the request. Changing workbooks clears the panel's local state.
 
 The engine commands `assistant.context`, `assistant.apply` (text), `assistant.applyGrid` and `assistant.formulaContext`
-(spreadsheet and design changes) implement the bounded snapshot and validated apply. Text output is always
-literal: leading `=`, `+`, `-` and `@` are refused, and replacing a numeric/date cell changes it to
-text, as the preview indicates. Spreadsheet proposals are limited to 256 cells and 64 KiB of addresses
+(spreadsheet and design changes) implement the bounded snapshot and validated apply. Every selected
+cell can be adapted, one or many, formulas included: formula cells reach the model as typed and
+labelled `formula`, and the model may rewrite them, for example to make a total cover the rows it
+should. A suggestion starting with `=` is written as a formula after it parses (an invalid formula
+refuses the whole apply); a number, percentage, currency amount or TRUE/FALSE is entered as typed, so
+it stays a value that formulas count; dates and times stay text, since their reading depends on the
+locale; any other text is literal, and a leading `+`, `-` or `@` that isn't a number is refused. Spreadsheet proposals are limited to 256 cells and 64 KiB of addresses
 and inputs; addresses must be absolute A1 (for example `B12`), duplicates are refused, and a new sheet
 name is checked before anything changes. Design proposals are limited to 64 operations: cell-style patches (colours as #RRGGBB strings, “auto” for none; the engine normalizes them into its colour enum),
 column widths or AutoFit, row heights, and at most one table per proposal; style patches are validated
-against the active cell style. Selected formula, merged, picture and spilled cells and
+against the active cell style. Selected merged, picture and spilled cells and
 protected sheets are refused as context. Grid changes can write formulas but refuse merged, picture
 and spilled cells. Programmatic requests still require `confirm: true`; no cloud
 request happens on opening the panel.
@@ -69,6 +73,7 @@ returned proposal now parses. The full pane flow with a real account is still to
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | Selected formula cells are no longer refused ("holds a formula; plain text cells only"): they are sent as typed with a `formula` label, and suggestions starting with `=` are parsed and written as formulas, so Mirai can adapt the contents and formulas of every selected cell, fixing formulas that no longer match their data. Numbers, percentages, currency and booleans are entered as typed (they were stored as text); dates stay text. Offline engine tests. |
 | 2026-10-30 | minor | Without a selection to edit, grid proposals no longer land on existing data or tables: the request carries the sheet layout (addresses only) and `assistant.applyGrid` moves a colliding block below the used area, rewriting formula references into the block and shifting its styles, tables and row sizes; the result reports `relocated`. A real selection keeps the old behaviour. New `assistant.freeArea` query. Offline engine tests. |
 | 2026-10-30 | minor | Design colours: the model writes them as #RRGGBB (or “auto”); the engine now rewrites just the colour-typed patch fields into its colour enum before validating, and the prompt documents the patch format with exact spellings. Fixes “unknown variant `#7F7F7F`, expected Auto, Rgb, Theme”. Verified live: a real header-styling request returned #FFFFFF/#1F4E78/#7F7F7F and applied as one undo step. |
 | 2026-10-30 | minor | Fixed the truncated output schema (one missing closing brace since the design-proposal change) that made every live Claude Code request fail as an invalid response. Schema-validity regression test, a captured real-envelope fixture, and one synthetic formula request verified end to end with the signed-in account. |
