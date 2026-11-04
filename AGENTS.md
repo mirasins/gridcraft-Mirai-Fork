@@ -51,6 +51,15 @@ People trust GridCraft with their numbers; a crash loses their work. **This outr
 ## Roadmap
 `ROADMAP.md` (committed) is the one-page summary: stage, headline numbers, dimensions, languages, progress log. It points at the detail in `docs/`: `target-app-parity.md` (authoritative assessment), `gaps.md` (ranked work list: pick from it), `roadmap.md` (current focus, beta gates, milestones), `architecture.md`, and the area checklists `function-parity.md`, `chart-parity.md`, `file-format-parity.md`, `ui-parity.md`, `hardware-parity.md`, `localization-parity.md`. Update the affected docs (and their timestamp lines and revision history) whenever work lands. `cargo xtask parity` regenerates `docs/parity-checklist.md` from `crates/engine/src/catalog.rs`.
 
+## OpenCode: delegación a subagentes
+- Para tareas específicas, se pueden usar Mistral Large y DeepSeek V4.1 Flash como subagentes. Consulta los modelos disponibles antes de seleccionarlos; no fijes identificadores ni versiones en el código o la documentación.
+- Delega tareas acotadas de búsqueda, revisión, implementación y pruebas según las capacidades disponibles, sin exigir verificación cruzada entre proveedores. El usuario decidirá cuándo verificar el trabajo o solicitar un agente verificador.
+- Usa modelos ligeros y de menor coste cuando sean adecuados; antes de elegir, consulta los modelos disponibles. No fijes identificadores ni versiones en el código o la documentación.
+- Elige el modelo adecuado para la tarea; la autorización para Mistral Large y DeepSeek V4.1 Flash incluye sus proveedores disponibles.
+- Prioriza modelos económicos cuando sean adecuados; usa Mistral Large para tareas cuya complejidad o riesgo lo justifiquen.
+- El agente principal coordina, toma las decisiones complejas y hace la revisión final del trabajo delegado.
+- Si un modelo solicitado no está disponible, informa al usuario y usa otro cuando sea adecuado.
+
 ## Contributor credits (About window)
 
 - About ▸ Contributors/Models are compiled into the binary from `contributors/contributors.json`
