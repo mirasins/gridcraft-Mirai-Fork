@@ -101,10 +101,11 @@ People trust GridCraft with their numbers; a crash loses their work. **This outr
 `ROADMAP.md` (committed) is the one-page summary: stage, headline numbers, dimensions, languages, progress log. It points at the detail in `docs/`: `target-app-parity.md` (authoritative assessment), `gaps.md` (ranked work list: pick from it), `roadmap.md` (current focus, beta gates, milestones), `architecture.md`, and the area checklists `function-parity.md`, `chart-parity.md`, `file-format-parity.md`, `ui-parity.md`, `hardware-parity.md`, `localization-parity.md`. Update the affected docs (and their timestamp lines and revision history) whenever work lands. `cargo xtask parity` regenerates `docs/parity-checklist.md` from `crates/engine/src/catalog.rs`.
 
 ## OpenCode: delegación a subagentes
-- Prioriza Mistral Large para los subagentes, si la tarea lo requiere usa cualquier modelo a través de cualquiera de los proveedores disponibles. Consulta los modelos disponibles antes de seleccionarlos; no fijes identificadores ni versiones en el código o la documentación.
+- Usa GPT-6.1 Terra como primera opción para subagentes, priorizando el proveedor OpenAI. Puedes usar otros modelos y proveedores cuando la tarea lo requiera. Consulta los modelos disponibles antes de seleccionarlos; no fijes identificadores de API en el código o la documentación.
 - Delega tareas acotadas de búsqueda, revisión, implementación y pruebas según las capacidades disponibles, sin exigir verificación cruzada entre proveedores. El usuario decidirá cuándo verificar el trabajo o solicitar un agente verificador.
 - Puedes usar modelos de cualquiera de los proveedores disponibles según la tarea; no hay restricción de proveedor para los subagentes.
-- Mantén Mistral Large como primera opción; usa otro modelo cuando la tarea lo requiera o Mistral Large no esté disponible o agote su cuota. Informa de la alternativa elegida.
+- Considera capacidad, fiabilidad, coste y disponibilidad. Si un modelo falla o agota su cuota, informa del cambio y elige una alternativa adecuada de cualquier proveedor disponible; no insistas en el modelo que está fallando.
+- Para resolver problemas complicados (diseño o arquitectura difícil, errores que no ceden, revisiones de alto riesgo), puedes escalar a modelos más capaces, como Claude Opus 5.5, GPT-6.1 Sol u otros de gama alta disponibles. Indica por qué escalas y vuelve al modelo habitual para el trabajo rutinario.
 - El agente principal coordina, toma las decisiones complejas y hace la revisión final del trabajo delegado.
 - Si un modelo solicitado no está disponible, informa al usuario y usa otro cuando sea adecuado.
 
