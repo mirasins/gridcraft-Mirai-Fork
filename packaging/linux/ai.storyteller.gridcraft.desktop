@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=GridCraft
+Name=Mirai Calc
 GenericName=Spreadsheet
 Comment=Calculate, analyse and chart data in workbooks
 Exec=gridcraft %F

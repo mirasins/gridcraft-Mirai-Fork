@@ -2,7 +2,9 @@
   <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.gridcraft.png" width="128" height="128" alt="GridCraft icon: a spreadsheet page on a green tile">
 </p>
 
-<h1 align="center">GridCraft</h1>
+<h1 align="center">Mirai Calc</h1>
+
+<p align="center"><sub>The Mirai fork of GridCraft. The app is called Mirai Calc; the code, binaries and app ids keep GridCraft's names.</sub></p>
 
 <p align="center">
   <b>Spreadsheets and data; an open-source, high-performance modern spreadsheet application, built in pure Rust.</b>

@@ -6,7 +6,7 @@ impl SheetApp {
             Ok(r) => self.after_open(Some(path), &r),
             // A password-protected workbook: ask for the password; the dialog opens it.
             Err(e) if e.contains(gridcraft_engine::io::PASSWORD_REQUIRED) => self.open_dialog("openPassword", json!({"path": path})),
-            Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
+            Err(e) => self.message = Some((crate::brand::APP_NAME.into(), clean_error(&e))),
         }
         self.after_engine();
     }
@@ -95,7 +95,7 @@ impl SheetApp {
                     self.backstage = None;
                     self.open_dialog("openPassword", json!({"name": name, "base64": b64}));
                 }
-                Err(e) => self.message = Some(("GridCraft".into(), clean_error(&e))),
+                Err(e) => self.message = Some((crate::brand::APP_NAME.into(), clean_error(&e))),
             }
             self.after_engine();
         }

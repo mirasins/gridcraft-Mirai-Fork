@@ -15,7 +15,7 @@ pub(super) fn about(ui: &mut egui::Ui, d: &mut Dialog) {
         "Contributors" => crate::credits::contributors_ui(ui),
         "Models" => crate::credits::models_ui(ui),
         _ => {
-            ui.heading("GridCraft");
+            ui.heading(crate::brand::APP_NAME);
             ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
             ui.add_space(4.0);
             ui.label("A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft.");

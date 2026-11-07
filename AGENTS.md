@@ -65,6 +65,7 @@ Read [`ROADMAP.md`](ROADMAP.md) and [`docs/gaps.md`](docs/gaps.md). `plan/` is a
 - Prefer art generated in code: the UI icon set (`crates/ui-egui/src/icons.rs`), table and cell style palettes, themes and sample workbooks are drawn/defined in code and original.
 - Never copy Office's icons, ribbon artwork, theme XML, table-style definitions, templates, clip art or wording beyond feature names. Excel feature *names* (menu labels, function names) are fine.
 - Screenshots of Microsoft software are never committed (they live only in `plan/excel/screenshots/`).
+- The app's name in this fork is **Mirai Calc**: `crates/ui-egui/src/brand.rs` holds it and rebrands every translated string (`Lang::tr`). Identifiers keep upstream's GridCraft names (binary, crates, app id, file format, settings folder, installer registry keys and UpgradeCode); when merging upstream, keep the fork's name in titles, About, README and the installer's display names.
 - This Mirai fork has removed the ArtCraft brand files (`docs/brand/`), as upstream asks of forks. Keep them out when merging upstream.
 
 ## Never crash

@@ -215,7 +215,7 @@ impl Language {
             Self::Nl => nl::translate(text),
             Self::Ro => ro::translate(text),
         };
-        translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+        crate::brand::rebrand(translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label)))
     }
 
     pub(crate) fn tr_error(self, message: &str) -> String {
@@ -339,7 +339,7 @@ mod tests {
     fn untranslated_text_falls_back_to_english() {
         let label = |key: &'static str| key.rsplit_once('|').map_or(key, |(_, label)| label);
         for (english, _) in ja::CORE {
-            assert_eq!(Language::En.tr(english), label(english));
+            assert_eq!(Language::En.tr(english), crate::brand::rebrand(label(english)));
         }
         for language in Language::ALL {
             assert_eq!(language.tr("Sheet1!A1"), "Sheet1!A1");
