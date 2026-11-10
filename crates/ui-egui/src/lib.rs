@@ -14,7 +14,7 @@ pub mod assistant_pane;
 pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
     // The Mirai fork's releases: updates are only ever downloaded from the fork's own
     // repository, never from upstream.
-    repo: "mirasins/gridcraft",
+    repo: "mirasins/mirai-calc-gridcraft-fork",
     icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.gridcraft.png")),
     accent: Some([0x1f, 0x9d, 0x55]),
     ..craft_update::suite::GRIDCRAFT

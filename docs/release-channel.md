@@ -15,7 +15,7 @@ The Mirai fork ships its own releases, separate from upstream `storytold/gridcra
 
 ## Update checks
 
-`crates/ui-egui/src/lib.rs` defines `UPDATE_APP` with the repository `mirasins/gridcraft`
+`crates/ui-egui/src/lib.rs` defines `UPDATE_APP` with the repository `mirasins/mirai-calc-gridcraft-fork`
 (it also carries the app icon and accent colour for the update prompt). The in-app updater
 and the self-update helper both use it, so update checks and downloads only ever look at
 the fork's GitHub releases — never at upstream's.
