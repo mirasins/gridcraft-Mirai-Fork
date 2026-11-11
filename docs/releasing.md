@@ -271,10 +271,10 @@ the publisher.
 
 ## Icons
 
-`assets/app-icon/gridcraft.svg` is a **placeholder** (an original ledger-page drawing on
-GridCraft green) until the owner makes GridCraft's engraved creature portrait. `packaging/icons.sh` regenerates the 1024 px PNG, the macOS 512 px
-PNG, the `.icns` (iconutil), the `.ico` (`cargo xtask ico`) and the hicolor PNGs from it; it
-needs `resvg`. The outputs are committed, so packaging never needs those tools. Every file has a
+`assets/app-icon/` holds the Mirai Calc icon supplied by the fork's owner: `gridcraft.svg` and
+`gridcraft-1024.png` are the masters. `packaging/icons.sh` scales the macOS 512 px PNG, the `.icns`,
+the `.ico` and the hicolor PNGs from the PNG; it needs Python 3 with Pillow. The outputs are
+committed, so packaging never needs it. Every file has a
 row in `ATTRIBUTION.md` (`cargo xtask assets`).
 
 ## Checks
