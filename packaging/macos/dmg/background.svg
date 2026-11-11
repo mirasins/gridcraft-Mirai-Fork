@@ -6,14 +6,14 @@
 </filter></defs>
 
 <rect width="660" height="400" fill="#efe9dc"/>
-<g clip-path="url(#panel)"><rect width="232" height="400" fill="#1f9d55"/><g transform="translate(-68.3,11.4) scale(0.72)"><image href="../../../assets/app-icon/gridcraft.svg" width="512" height="512"/></g></g>
+<g clip-path="url(#panel)"><rect width="232" height="400" fill="#28afae"/><g transform="translate(-68.3,11.4) scale(0.72)"><image href="../../../assets/app-icon/gridcraft.svg" width="512" height="512"/></g></g>
 <line x1="232.5" y1="0" x2="232.5" y2="400" stroke="#0b0b0c" stroke-width="1.2"/>
 <line x1="236.5" y1="0" x2="236.5" y2="400" stroke="#0b0b0c" stroke-width="0.5"/>
 
 <line x1="267" y1="88.5" x2="624" y2="88.5" stroke="#0b0b0c" stroke-width="0.6"/>
-<path d="M271.5,81.5 L276,88.5 L271.5,95.5 L267,88.5 Z" fill="#1f9d55"/>
+<path d="M271.5,81.5 L276,88.5 L271.5,95.5 L267,88.5 Z" fill="#28afae"/>
 
-<rect x="408" y="197.0" width="19" height="16" fill="#efe9dc" stroke="#0b0b0c" stroke-opacity="0.45" stroke-width="0.7"/><rect x="427" y="197.0" width="19" height="16" fill="#efe9dc" stroke="#0b0b0c" stroke-opacity="0.45" stroke-width="0.7"/><rect x="446" y="197.0" width="19" height="16" fill="#efe9dc" stroke="#0b0b0c" stroke-opacity="0.45" stroke-width="0.7"/><rect x="465" y="197.0" width="19" height="16" fill="#efe9dc" stroke="#0b0b0c" stroke-opacity="0.45" stroke-width="0.7"/><rect x="408" y="197.0" width="76" height="16" fill="#1f9d55" fill-opacity="0.18" stroke="#1f9d55" stroke-width="2"/><rect x="481" y="210.0" width="6" height="6" fill="#1f9d55" stroke="#efe9dc" stroke-width="1"/><path d="M498.1,205.0 L487.1,210.5 L487.1,199.5 Z" fill="#0b0b0c"/>
+<rect x="408" y="197.0" width="19" height="16" fill="#efe9dc" stroke="#0b0b0c" stroke-opacity="0.45" stroke-width="0.7"/><rect x="427" y="197.0" width="19" height="16" fill="#efe9dc" stroke="#0b0b0c" stroke-opacity="0.45" stroke-width="0.7"/><rect x="446" y="197.0" width="19" height="16" fill="#efe9dc" stroke="#0b0b0c" stroke-opacity="0.45" stroke-width="0.7"/><rect x="465" y="197.0" width="19" height="16" fill="#efe9dc" stroke="#0b0b0c" stroke-opacity="0.45" stroke-width="0.7"/><rect x="408" y="197.0" width="76" height="16" fill="#28afae" fill-opacity="0.18" stroke="#28afae" stroke-width="2"/><rect x="481" y="210.0" width="6" height="6" fill="#28afae" stroke="#efe9dc" stroke-width="1"/><path d="M498.1,205.0 L487.1,210.5 L487.1,199.5 Z" fill="#0b0b0c"/>
 <line x1="267" y1="335.5" x2="624" y2="335.5" stroke="#0b0b0c" stroke-width="0.6"/>
 
 

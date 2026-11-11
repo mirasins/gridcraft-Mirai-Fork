@@ -1,61 +1,56 @@
 #!/usr/bin/env bash
-# Regenerate every app icon from assets/app-icon/gridcraft.svg.
+# Regenerate every Mirai Calc app icon from its masters in assets/app-icon/: gridcraft-1024.png (and
+# the SVG, copied as the Linux scalable icon). The masters are the Mirai icon set supplied by the
+# fork's owner (MIT OR Apache-2.0); the tile already sits on Apple's icon grid, so every platform
+# uses it as is.
 #
-# Needs: resvg (brew install resvg / cargo install resvg). On macOS, iconutil also writes the
-# .icns. The outputs are committed, so builds and packaging never need these tools.
+# Needs: Python 3 with Pillow. The outputs are committed, so builds and packaging never need it.
 #
 #   packaging/icons.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIR="$ROOT/assets/app-icon"
-SVG="$DIR/gridcraft.svg"
-ID="ai.storyteller.gridcraft"
-TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+APP="gridcraft"
+ID="ai.storyteller.$APP"
 
-command -v resvg >/dev/null || { echo "error: resvg not found (brew install resvg)" >&2; exit 1; }
+python3 - "$DIR" "$APP" <<'PY'
+import os, struct, sys
+from io import BytesIO
+from PIL import Image
 
-# The artwork is a full-bleed 512 tile (rx=112). Windows and Linux use it as is. macOS icons sit on
-# Apple's grid: an 824/1024 body with a transparent margin, so widen the viewBox to 512*1024/824.
-MAC="$TMP/mac.svg"
-sed 's/viewBox="0 0 512 512"/viewBox="-62.136 -62.136 636.272 636.272"/' "$SVG" >"$MAC"
-grep -q 'viewBox="-62.136' "$MAC" || { echo "error: expected viewBox=\"0 0 512 512\" in $SVG" >&2; exit 1; }
+d, app = sys.argv[1:3]
+ident = "ai.storyteller." + app
+master = Image.open(os.path.join(d, app + "-1024.png")).convert("RGBA")
 
-render() {
-  local svg="$1" size="$2" out="$3"
-  resvg -w "$size" -h "$size" "$svg" "$out" </dev/null
-}
+def scaled(size):
+    return master.resize((size, size), Image.LANCZOS)
 
-render "$SVG" 1024 "$DIR/gridcraft-1024.png"
-# Runtime window/Dock icon on macOS (for apps/gridcraft to embed); other platforms use hicolor 256.
-render "$MAC" 512 "$DIR/gridcraft-macos-512.png"
+for s in (16, 24, 32, 48, 64, 128, 256, 512):
+    out = os.path.join(d, "hicolor", f"{s}x{s}", "apps", ident + ".png")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    scaled(s).save(out, optimize=True)
+macos = os.path.join(d, app + "-macos-512.png")
+if os.path.exists(macos):
+    scaled(512).save(macos, optimize=True)
 
-# Linux hicolor theme.
-for s in 16 24 32 48 64 128 256 512; do
-  mkdir -p "$DIR/hicolor/${s}x${s}/apps"
-  render "$SVG" "$s" "$DIR/hicolor/${s}x${s}/apps/$ID.png"
-done
+# Windows .ico: PNG-compressed entries, 16-256 px.
+blobs = []
+for s in (16, 20, 24, 32, 40, 48, 64, 128, 256):
+    buf = BytesIO()
+    scaled(s).save(buf, "PNG", optimize=True)
+    blobs.append((s, buf.getvalue()))
+head = struct.pack("<HHH", 0, 1, len(blobs))
+entries, data, offset = b"", b"", 6 + 16 * len(blobs)
+for s, b in blobs:
+    entries += struct.pack("<BBBBHHII", s % 256, s % 256, 0, 0, 1, 32, len(b), offset)
+    data += b
+    offset += len(b)
+open(os.path.join(d, app + ".ico"), "wb").write(head + entries + data)
+
+# macOS .icns, 16-1024 px.
+master.save(os.path.join(d, app + ".icns"), "ICNS")
+PY
+
 mkdir -p "$DIR/hicolor/scalable/apps"
-cp "$SVG" "$DIR/hicolor/scalable/apps/$ID.svg"
-
-# Windows .ico.
-ICO_PNGS=()
-for s in 16 20 24 32 40 48 64 128 256; do
-  render "$SVG" "$s" "$TMP/ico-$s.png"
-  ICO_PNGS+=("$TMP/ico-$s.png")
-done
-(cd "$ROOT" && cargo run -q -p xtask --no-default-features -- ico "$DIR/gridcraft.ico" "${ICO_PNGS[@]}")
-
-# macOS .icns.
-if command -v iconutil >/dev/null; then
-  SET="$TMP/gridcraft.iconset"
-  mkdir -p "$SET"
-  for s in 16 32 128 256 512; do
-    render "$MAC" "$s" "$SET/icon_${s}x${s}.png"
-    render "$MAC" $((s * 2)) "$SET/icon_${s}x${s}@2x.png"
-  done
-  iconutil -c icns -o "$DIR/gridcraft.icns" "$SET"
-else
-  echo "warning: iconutil not found (macOS only); gridcraft.icns not regenerated" >&2
-fi
+cp "$DIR/$APP.svg" "$DIR/hicolor/scalable/apps/$ID.svg"
 echo "icons written to $DIR"
