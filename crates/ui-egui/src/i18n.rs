@@ -194,7 +194,9 @@ impl Language {
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
     /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
-        self.translated(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+        crate::brand::rebrand(
+            self.translated(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label)),
+        )
     }
 
     /// The catalog's own translation of `text`, or `None` when it falls back to English.
@@ -219,8 +221,7 @@ impl Language {
             Self::Vi => vi::translate(text),
             Self::Nl => nl::translate(text),
             Self::Ro => ro::translate(text),
-        };
-        crate::brand::rebrand(translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label)))
+        }
     }
 
     pub(crate) fn tr_error(self, message: &str) -> String {
