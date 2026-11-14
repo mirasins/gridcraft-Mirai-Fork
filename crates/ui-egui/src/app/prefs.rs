@@ -25,7 +25,7 @@ impl SheetApp {
             ctx.set_theme(preference);
             ctx.request_repaint();
         }
-        self.effective_dark = ctx.theme() == egui::Theme::Dark;
+        self.effective_dark = ctx.global_style().visuals.dark_mode;
     }
 
     /// Keeps egui's own keyboard zoom and quit shortcuts off and applies GridCraft's zoom factor.
@@ -64,5 +64,13 @@ impl SheetApp {
         {
             self.message = Some((crate::brand::APP_NAME.into(), "The web version is always the latest release.".into()));
         }
+    }
+
+    /// Starts the install helper of an update that is ready, so it installs once the process has
+    /// exited (a no-op on the web, and when no update is ready). Call it in `on_exit` when the
+    /// process ends there, since the app is then never dropped.
+    pub fn start_pending_update(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        updates_ui::start_pending_update(self);
     }
 }

@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-04 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All); earlier: §22 Mirai spreadsheet change proposals with preview, one undo step and overwrite warning; formula and workbook analysis remain open · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -54,8 +54,15 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
 ### 5. Text in non-Latin scripts doesn't render or export (L)
-- **Missing:** CJK font fallback, complex shaping (Arabic, Devanagari, Thai), bidi, non-Latin PDF.
+- **Missing:** cross-platform script coverage, Devanagari/Thai shaping verification, non-Latin PDF and Arabic UI layout.
 - **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32); #142
+  (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora). Arabic shared shaping/bidi,
+  editing and cell Context/LTR/RTL now have focused regressions and full gates. Arabic font
+  delivery and PDF output are separate PRs; other script shaping still needs verification.
+- **Missing:** CJK font fallback, complex shaping (Arabic, Devanagari, Thai), bidi, non-Latin PDF.
+- **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32), and for
+  Arabic (system, fontconfig and craft-fonts faces); a UI font with Arabic of its own (DejaVu Sans
+  in the Flatpak) still draws interface Arabic ahead of fontconfig's choice (#229); #142
   (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora); no shaping for Arabic or
   Devanagari; PDF writer uses 14 standard fonts only.
 - **Impact:** blocks most of the world's users even with an English UI.
@@ -148,7 +155,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 17. Insert objects (F)
 - Ink strokes now survive XLSX save/reopen as editable polylines. Inserted icons still lose their
   identity/artwork on save (#551); native Office InkML import is not implemented.
-- SmartArt, WordArt, signature line, objects, 3-D models, screenshot; 8 shape kinds vs ~170;
+- SmartArt, signature line, objects, 3-D models, screenshot; 8 shape kinds vs ~170;
   pictures in cells (#61, PR #105). Equations exist (LaTeX source with a live preview, Office Math in xlsx); there is
   no structured (WYSIWYG) equation editing and no ink equations. **Estimate:** 25–40 h.
 
@@ -172,16 +179,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   function API. **Estimate:** 25–40 h plus an owner decision.
 
 ### 22. AI features (F)
-- Mirai offers reviewed proposals for selected cells through the official Claude Code CLI, with
-  per-request consent and one-step undo. Only the selection is sent. Proposals can be plain text
-  rewrites, cell inputs (values and `=` formulas, up to 256 cells), typed sheet-design operations
-  (cell styles, column widths or AutoFit, row heights, Excel tables, up to 64 operations) and an
-  explicitly requested new sheet, shown in a preview that warns about overwrites. Natural-language
-  formula generation over a bounded window of cells
-  around the selection is included (the selection plus up to 60 rows and columns away, 32 KiB,
-  formulas as typed); whole-workbook analysis, charts and broader formula assistance remain
-  missing; agent control via MCP is already strong. Proposals are previewed on the sheet itself:
-  proposed inputs over their cells, an “Apply?” banner with Enter/Esc, a one-line summary in the chat. **Remaining estimate:** 20-40 h; see [writing-assistant.md](writing-assistant.md).
+- No in-app assistant, natural-language formulas or Analyze Data; agent control via MCP is
+  already strong. **Estimate:** 30–50 h; model choice needs the owner.
 
 ### 23. Mobile (platform)
 - No iOS, iPadOS or Android layout. **Estimate:** 30–60 h.
@@ -201,11 +200,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-11-01 | minor | §4: chart data tables implemented for column, bar, line, area and compatible combo charts, with legend keys and border settings, live source values, XLSX round-trip and print/PDF; other chart gaps remain. |
 | 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
 | 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
-| 2026-10-30 | minor | §22: fixed the truncated output schema that made every live Claude Code request fail as invalid (missing closing brace since the design-proposal change); schema-validity regression test, real-envelope fixture, one live synthetic request verified. |
-| 2026-10-29 | minor | §22: Mirai proposals preview on the sheet (proposed inputs painted over their cells, “Apply?” banner, Enter applies, Esc cancels); the chat keeps a one-line summary; cancelling touches nothing. |
-| 2026-10-29 | minor | §22: formula work over a bounded window of cells around the selection (`assistant.formulaContext`, pane checkbox, consent notice); fixed numeric selections failing every apply as changed. |
-| 2026-10-29 | minor | §22: Mirai spreadsheet change proposals (cell inputs up to 256 cells, optional requested new sheet), previewed and applied as one undo step; stale proposals rejected; formula and workbook analysis remain open |
-| 2026-10-26 | minor | §22: first Mirai selected-cell text rewrite panel with per-request consent, stale-context checks and undoable literal apply; formula and workbook analysis remain open |
+| 2026-10-26 | minor | Arabic shared bidi display/editing and persisted cell reading direction; other script and PDF work remain separate |
+| 2026-10-26 | minor | §5: Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |

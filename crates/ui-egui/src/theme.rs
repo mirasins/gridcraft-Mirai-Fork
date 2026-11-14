@@ -30,16 +30,19 @@ pub enum Skin {
     #[default]
     Classic,
     Mirai,
+    #[serde(rename = "aura-dark")]
+    AuraDark,
 }
 
 impl Skin {
-    pub const ALL: [Skin; 2] = [Skin::Classic, Skin::Mirai];
+    pub const ALL: [Skin; 3] = [Skin::Classic, Skin::Mirai, Skin::AuraDark];
 
     /// The stable identifier used by commands and saved preferences.
     pub fn code(self) -> &'static str {
         match self {
             Skin::Classic => "classic",
             Skin::Mirai => "mirai",
+            Skin::AuraDark => "aura-dark",
         }
     }
 
@@ -48,6 +51,7 @@ impl Skin {
         match self {
             Skin::Classic => "GridCraft",
             Skin::Mirai => "Mirai Theme",
+            Skin::AuraDark => "Aura Dark",
         }
     }
 
@@ -90,7 +94,12 @@ mod font_setup;
 
 pub use font_fallback::symbol_face_installed;
 #[cfg(test)]
-use font_fallback::{cjk_han_japanese, cjk_han_simplified, cjk_hangul, fallback_faces, hebrew, lao, symbols_more, thai};
+use font_fallback::{
+    PREFERRED_ARABIC, arabic, cjk_han_japanese, cjk_han_simplified, cjk_hangul, fallback_faces, hebrew, lao, load_faces, preferred_file,
+    symbols_more, thai,
+};
+#[cfg(all(test, unix, not(target_os = "macos")))]
+use font_fallback::{covers_arabic, fontconfig_arabic, parse_fc_match};
 use font_setup::pick;
 pub use font_setup::{
     CELL, CELL_BOLD, CELL_BOLD_ITALIC, CELL_ITALIC, CraftFont, HanOrder, MATH, MATH_BOLD, MATH_ITALIC, MONO, SERIF, UI, UI_BOLD, available_text,
@@ -98,7 +107,7 @@ pub use font_setup::{
     font_definitions, font_definitions_for_language, font_definitions_with, pinned_font_definitions, symbol_fallback, ui_bold, ui_font,
 };
 #[cfg(test)]
-use font_setup::{candidates, craft_font_faces, try_load};
+use font_setup::{candidates, craft_font_faces, font_definitions_impl, try_load};
 #[cfg(test)]
 pub(crate) use font_setup::{drop_unparseable_fonts, font_parses};
 
@@ -362,6 +371,7 @@ impl Tokens {
         match skin {
             Skin::Classic => t,
             Skin::Mirai => mirai(t),
+            Skin::AuraDark => aura_dark(Tokens::palette(true)),
         }
     }
 
@@ -378,6 +388,40 @@ impl Tokens {
     pub fn ref_color(&self, index: usize, on_sheet: bool) -> Color32 {
         let set = if on_sheet { &self.sheet_ref_colors } else { &self.ref_colors };
         set.get(index % set.len()).copied().unwrap_or(self.text)
+    }
+}
+
+/// Aura Dark palette adapted from Aura Theme; attribution and MIT license are in ATTRIBUTION.md.
+fn aura_dark(t: Tokens) -> Tokens {
+    Tokens {
+        window: rgb(0x121016),
+        ribbon: rgb(0x15141B),
+        ribbon_border: rgb(0x3B334B),
+        text: rgb(0xEDECEE),
+        text_dim: rgb(0xCDCCCE),
+        text_disabled: rgb(0xADACAE),
+        accent: rgb(0x61FFCA),
+        accent_dark: rgb(0x61FFCA),
+        accent_soft: rgb(0x29263C),
+        hover: rgb(0x3B334B),
+        pressed: rgb(0x463C5C),
+        separator: rgb(0x3B334B),
+        desk: rgb(0x110F18),
+        header_bg: rgb(0x15141B),
+        header_text: rgb(0xCDCCCE),
+        header_line: rgb(0x3B334B),
+        header_sel_bg: rgb(0x29263C),
+        header_sel_text: rgb(0x61FFCA),
+        header_all_bg: rgb(0x3B334B),
+        input_bg: rgb(0x110F18),
+        input_border: rgb(0x3B334B),
+        tab_bar: rgb(0x121016),
+        tab_active: rgb(0x2E2B38),
+        status_bar: rgb(0x121016),
+        menu_bg: rgb(0x15141B),
+        on_accent: rgb(0x110F18),
+        paper: rgb(0x2E2B38),
+        ..t
     }
 }
 
@@ -443,7 +487,7 @@ fn install_visuals(ctx: &egui::Context, skin: Skin) {
     for theme in [egui::Theme::Light, egui::Theme::Dark] {
         let dark = theme == egui::Theme::Dark;
         let t = Tokens::for_skin(dark, skin);
-        let mut v = if dark { Visuals::dark() } else { Visuals::light() };
+        let mut v = if t.dark { Visuals::dark() } else { Visuals::light() };
         v.panel_fill = t.window;
         v.window_fill = t.menu_bg;
         v.extreme_bg_color = t.input_bg;
@@ -607,6 +651,7 @@ mod contrast_tests {
             assert_eq!(back, skin);
         }
         assert_eq!(Skin::parse(" MIRAI "), Some(Skin::Mirai));
+        assert_eq!(Skin::parse(" AURA-DARK "), Some(Skin::AuraDark));
         assert_eq!(Skin::parse("neon"), None);
         #[derive(serde::Deserialize)]
         struct Saved {
@@ -617,6 +662,28 @@ mod contrast_tests {
         assert_eq!(read(serde_json::json!({"skin": "neon"})), Some(Skin::Classic));
         assert_eq!(read(serde_json::json!({"skin": 7})), Some(Skin::Classic));
         assert_eq!(read(serde_json::json!({"skin": "mirai"})), Some(Skin::Mirai));
+    }
+
+    #[test]
+    fn aura_is_dark_in_both_modes_and_survives_preferences_round_trip() {
+        let saved = serde_json::to_value(crate::UiState { skin: Skin::AuraDark, ..Default::default() }).unwrap();
+        assert_eq!(saved["skin"], "aura-dark");
+        let restored: crate::UiState = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.skin, Skin::AuraDark);
+        for dark in [false, true] {
+            let t = Tokens::for_skin(dark, restored.skin);
+            assert!(t.dark);
+            assert_eq!(t.window, rgb(0x121016));
+            assert_eq!(t.accent, rgb(0x61FFCA));
+            assert_eq!(t.grid_bg, Color32::WHITE);
+        }
+        let ctx = egui::Context::default();
+        set_skin(&ctx, Skin::AuraDark);
+        for mode in [egui::Theme::Light, egui::Theme::Dark] {
+            assert!(ctx.style_of(mode).visuals.dark_mode);
+        }
+        set_skin(&ctx, Skin::Classic);
+        assert!(!ctx.style_of(egui::Theme::Light).visuals.dark_mode);
     }
 
     #[test]

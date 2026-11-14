@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-04 · **Change:** minor (Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros); earlier: Mirai structured cell and new-sheet proposals; engine remains provider-independent · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -23,8 +23,7 @@ including tests, 2026-10-10.
 | L2 | `pdf` | ~1k | Small PDF 1.7 writer (14 standard fonts, vectors, images) for print and export |
 | L3 | `chart` | ~2.9k | Toolkit-free chart layout to drawing primitives, a rasterizer, sparklines |
 | L5 | `engine` | ~17.7k | `Session`: open workbooks, selection, history (COW snapshots), clipboard, fill, sort, filter, PivotTables, what-if, print, file I/O (`io.rs`), and the command registry (`cmd/*`, 313 commands) with the Excel ribbon catalog (`catalog.rs`) |
-| L4 | `assistant` | — | Standalone official-Claude Code transport, bounded JSON protocol, auth checks and cancellable process; engine remains provider-independent |
-| L6 | `ui-egui` | ~11.6k | Excel-style UI (title bar, QAT, ribbon, formula bar, virtualised grid, editor, tabs, status bar, dialogs, task panes, chart view, Mirai cell and sheet proposals) and the control channel |
+| L6 | `ui-egui` | ~11.6k | Excel-style UI (title bar, QAT, ribbon, formula bar, virtualised grid, editor, tabs, status bar, dialogs, task panes, chart view) and the control channel |
 | L6 | `mcp` | ~1.4k | MCP server over stdio (hand-written JSON-RPC), headless or bridged to a running app |
 | L7 | `apps/gridcraft`, `apps/gridcraft-cli`, `apps/gridcraft-web` | ~2.2k | Desktop (eframe/wgpu), CLI (`info`, `convert`, `eval`, `cat`, `run`, `commands`, `functions`, `mcp`, `send`), web (WASM via trunk) |
 | — | `xtask` | — | `ci`, `parity`, `assets`, `layers`, `wasm`, `version`, `stats` |
@@ -85,6 +84,12 @@ drawing its own:
   ahead of its input, so the field never gets a Tab or an Enter of a focused editor; and it
   scrolls past `max_lines` with the caret in view. The tokenizer and the key edits are pure functions with tests, including
   hostile input.
+- **CJK text baselines**: system CJK fallback faces and permitted embedded faces tagged with
+  CJK scripts use epaint's baseline fallback alignment in cells, editors and window titles.
+  Other scripts, symbols and emoji keep their existing alignment. Baseline alignment can
+  increase line height; manual row heights and clipping remain unchanged. Reports:
+  [#1265](https://github.com/storytold/gridcraft/issues/1265) and
+  [#2621](https://github.com/storytold/gridcraft/issues/2621).
 - **Code editor marks**: `code_editor_marked` underlines a byte range in the error colour (the
   equation editor marks the position of a LaTeX error with it).
 - **Formula bar**: grows with its content from one line to `formula_bar::MAX_LINES` (five), then
@@ -243,8 +248,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-11-01 | minor | Equations: the `math` crate (L1), the layout cache and code editor marks |
 | 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
-| 2026-10-29 | minor | Mirai previews structured cell and sheet proposals and applies them through a grouped engine command. |
-| 2026-10-26 | minor | L4 standalone official-Claude transport and L6 Mirai selected-cell text proposal pane; engine remains provider-independent. |
+| 2026-10-31 | minor | System and embedded CJK fallback faces share the Latin baseline without changing other script, symbol or emoji alignment |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |

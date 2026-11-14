@@ -1,6 +1,6 @@
 use super::{
-    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, NoticeKind, SheetApp, UiRequest, assistant_pane, backstage, clamp_interface_scale, clean_error,
-    dialogs, formula_locale, i18n, json, now_ms, printing,
+    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, NoticeKind, SheetApp, UiRequest, assistant_pane, backstage, clamp_interface_scale,
+    clean_error, dialogs, formula_locale, i18n, json, now_ms, printing,
 };
 
 impl SheetApp {
@@ -96,6 +96,21 @@ impl SheetApp {
         {
             self.deliver_pdf(r);
         }
+        // The scan stopped at its cell allowance: say that some cells were not checked.
+        if id == "data.circleInvalid"
+            && let Ok(r) = &r
+            && r.get("truncated").and_then(Json::as_bool) == Some(true)
+        {
+            let scan = "The scan stopped after 100,000 cell visits; some validated cells were not checked for invalid data.";
+            // An open-time warning that is still shown keeps its text and action; the scan note joins it.
+            match self.notice.as_mut() {
+                Some(n) => {
+                    n.text = format!("{} {scan}", n.text);
+                    n.kind = NoticeKind::Warning;
+                }
+                None => self.notice = Some(Notice { text: scan.into(), kind: NoticeKind::Warning, action: None }),
+            }
+        }
         r
     }
 
@@ -141,7 +156,7 @@ impl SheetApp {
         if e.contains("is not available right now") {
             self.toast = Some((e, now_ms()));
         } else {
-            self.message = Some((crate::brand::APP_NAME.into(), clean_error(&e)));
+            self.message = Some(("GridCraft".into(), clean_error(&e)));
         }
     }
 
@@ -195,12 +210,14 @@ impl SheetApp {
                 Ok(json!({"mode": self.ui.theme_mode()}))
             }
             "view.themeSkin" => {
-                let skin = p.get("skin").and_then(Json::as_str).and_then(crate::theme::Skin::parse);
-                let Some(skin) = skin else {
-                    return Some(Err("skin must be classic or mirai".into()));
-                };
-                self.ui.skin = skin;
-                Ok(json!({"skin": skin.code()}))
+                let code = p.get("skin").and_then(Json::as_str).unwrap_or("");
+                match crate::theme::Skin::parse(code) {
+                    Some(skin) => {
+                        self.ui.skin = skin;
+                        Ok(json!({"skin": skin.code()}))
+                    }
+                    None => Err(format!("unknown interface theme {code:?}")),
+                }
             }
             "view.animations" => {
                 self.ui.animations = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.animations);
@@ -311,10 +328,11 @@ impl SheetApp {
         // The requests belong to the window the command left active.
         self.follow_active_window();
         self.prune_selected_object();
+        self.prune_views();
         for req in self.session.take_ui_requests() {
             match req {
                 UiRequest::Dialog(name, params) => self.open_dialog(&name, params),
-                UiRequest::Message(m) => self.message = Some((crate::brand::APP_NAME.into(), m)),
+                UiRequest::Message(m) => self.message = Some(("GridCraft".into(), m)),
                 UiRequest::EditCell(text) => {
                     let text = text.map(|text| {
                         self.session

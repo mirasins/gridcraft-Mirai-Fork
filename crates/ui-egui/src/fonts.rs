@@ -19,6 +19,24 @@ use std::sync::OnceLock;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_FONT_FILE: u64 = 64 << 20;
 
+/// Reads a font file of at most [`MAX_FONT_FILE`] bytes, even when it grows after it was found.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_font(path: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let file = std::fs::File::open(path).ok()?;
+    if file.metadata().ok()?.len() > MAX_FONT_FILE {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_FONT_FILE + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= MAX_FONT_FILE).then_some(bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn read_font(_path: &std::path::Path) -> Option<Vec<u8>> {
+    None
+}
+
 /// A face keeps at most this many family names, so a hostile `name` table can't grow the catalog.
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_FAMILY_NAMES: usize = 16;
@@ -172,7 +190,7 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<Face> {
             if !is_font || std::fs::metadata(&path).map(|m| m.len() > MAX_FONT_FILE).unwrap_or(true) {
                 continue;
             }
-            let Ok(data) = std::fs::read(&path) else { continue };
+            let Some(data) = read_font(&path) else { continue };
             for (index, family, names, style) in file_faces(&data) {
                 out.push(Face { family, names, path: path.clone(), index, weight: style_weight(&style), italic: style_italic(&style) });
             }
@@ -196,18 +214,6 @@ pub fn catalog() -> &'static [Face] {
 /// The catalog if the scan has finished, else `None` — never blocks, for use while painting.
 fn catalog_now() -> Option<&'static [Face]> {
     CATALOG.get().map(Vec::as_slice)
-}
-
-/// Installed family names, available after the background scan finishes.
-pub fn installed_families() -> &'static [String] {
-    static FAMILIES: OnceLock<Vec<String>> = OnceLock::new();
-    let Some(faces) = catalog_now() else { return &[] };
-    FAMILIES.get_or_init(|| {
-        let mut names: Vec<String> = faces.iter().map(|face| face.family.clone()).collect();
-        names.sort_by_cached_key(|name| name.to_lowercase());
-        names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
-        names
-    })
 }
 
 /// Start cataloging the installed fonts on a background thread, so the first frame doesn't wait for
@@ -347,7 +353,7 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
                 continue;
             }
             if !fonts.font_data.contains_key(&key) {
-                let Ok(bytes) = std::fs::read(&face.path) else { continue };
+                let Some(bytes) = read_font(&face.path) else { continue };
                 let mut fd = egui::FontData::from_owned(bytes);
                 fd.index = face.index;
                 fonts.font_data.insert(key.clone(), std::sync::Arc::new(fd));
@@ -365,23 +371,22 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
     bound
 }
 
-/// Bind every installed face of `family`, found by any of its names (see [`bind_faces`]).
-pub fn bind_family(fonts: &mut egui::FontDefinitions, family: &str) -> Vec<String> {
-    bind_faces(fonts, family, &faces_of(family))
-}
+/// The role families currently bound to font data. `cell_family` consults this, so it never names a
+/// family egui hasn't been given.
+static BOUND: OnceLock<std::sync::RwLock<HashSet<String>>> = OnceLock::new();
 
-thread_local! {
-    static BOUND: std::cell::RefCell<HashSet<String>> = std::cell::RefCell::new(HashSet::new());
+fn bound() -> &'static std::sync::RwLock<HashSet<String>> {
+    BOUND.get_or_init(|| std::sync::RwLock::new(HashSet::new()))
 }
 
 /// Record the role families a freshly built [`egui::FontDefinitions`] bound.
 pub fn set_bound(keys: impl IntoIterator<Item = String>) {
-    BOUND.with(|b| *b.borrow_mut() = keys.into_iter().collect());
+    *bound().write().unwrap_or_else(std::sync::PoisonError::into_inner) = keys.into_iter().collect();
 }
 
 /// Is this exact role family bound to font data?
 pub fn is_bound(role: &str) -> bool {
-    BOUND.with(|b| b.borrow().contains(role))
+    bound().read().unwrap_or_else(std::sync::PoisonError::into_inner).contains(role)
 }
 
 /// Serializes tests that mutate the process-wide bound-family registry.
@@ -422,21 +427,6 @@ mod tests {
         assert!(is_bound(&k));
         set_bound([]);
         assert!(!is_bound(&k));
-    }
-
-    #[test]
-    fn bound_registry_does_not_leak_across_threads() {
-        // Regression: a process-global BOUND let one egui context inherit another's bound
-        // roles (e.g. `fnt:Calibri:nn` while its scan had not finished), and egui panicked
-        // with "No glyph in family ... Installed fonts: []". Each thread/context keeps its
-        // own registry.
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let k = role_key("Calibri", false, false);
-        set_bound([k.clone()]);
-        assert!(is_bound(&k));
-        let leaked = std::thread::spawn(move || is_bound(&k)).join().expect("thread");
-        assert!(!leaked, "a sibling thread must not see this thread's bound roles");
-        set_bound([]);
     }
 
     #[test]
@@ -495,6 +485,8 @@ mod tests {
         }
         // A family with no faces binds nothing and never touches the map.
         assert!(bind_faces(&mut fonts, "No Such Font", &[]).is_empty());
+        std::fs::File::create(&face.path).expect("sparse file").set_len(MAX_FONT_FILE + 1).expect("oversized file");
+        assert!(read_font(&face.path).is_none(), "an oversized font is not read");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
