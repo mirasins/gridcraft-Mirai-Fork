@@ -52,9 +52,6 @@ impl SheetApp {
     /// Applies the font gates: a language Han-order change, startup/prepared fonts and workbook
     /// font binding. Every branch keeps its one-frame paint gate.
     pub(super) fn apply_font_state(&mut self, ctx: &egui::Context) {
-        if !self.prepared_fonts && !fonts::scan_done() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(250));
-        }
         // A pending synthetic step owns the next real `ui` pass: `ui` returns at the font gate
         // before it handles input, so a font change requested now would consume the step without
         // applying it. Delay the change one frame; the hidden-paint request keeps it coming.
@@ -85,10 +82,8 @@ impl SheetApp {
         }
         if self.prepared_fonts {
             ctx.set_fonts(theme::pinned_font_definitions());
-            theme::set_skin(ctx, self.ui.skin);
             theme::apply(ctx, self.ui.dark);
         } else {
-            theme::set_skin(ctx, self.ui.skin);
             SheetApp::setup_context_for_language(ctx, self.ui.dark, self.ui.language);
         }
         self.fonts_set = true;
