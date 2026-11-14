@@ -25,7 +25,7 @@ impl SheetApp {
             ctx.set_theme(preference);
             ctx.request_repaint();
         }
-        self.effective_dark = ctx.theme() == egui::Theme::Dark;
+        self.effective_dark = ctx.global_style().visuals.dark_mode;
     }
 
     /// Keeps egui's own keyboard zoom and quit shortcuts off and applies GridCraft's zoom factor.

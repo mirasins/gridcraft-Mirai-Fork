@@ -49,3 +49,28 @@ Generated-in-code art is original and has no file to list: the UI icon set (`cra
 | `docs/images/page-break.png` | GridCraft contributors | screenshot of GridCraft rendered offscreen (`crates/ui-egui/examples/snapshot.rs`) showing an original sample workbook | MIT OR Apache-2.0 | README screenshot; no third-party content |
 | Core 14 AFM metric numbers in `crates/pdf/src/symbol.rs` (Symbol: character codes and advance widths) and `crates/pdf/src/metrics.rs` (Helvetica, Times and Courier advance widths); no font file | Adobe Systems Incorporated | Adobe's Core 14 AFM font metrics files (`Symbol.afm` 001.008 and the Helvetica, Times and Courier AFMs) | Adobe's Core 14 metrics notice: the files may be used, copied and distributed for any purpose and without charge, provided the notice is kept (quoted in `crates/pdf/src/metrics.rs`) | Numbers only, typed in from the public metrics. PDF export embeds no font: Symbol and the Times faces are base-14 fonts every PDF reader supplies, and text outside WinAnsiEncoding is set in a predefined, non-embedded Adobe-GB1 CID font |
 | Unicode values of the Symbol encoding in `crates/pdf/src/symbol.rs` (the code-to-character map; numbers only, no file copied) | Unicode, Inc. | `symbol.txt`, "Adobe Symbol Encoding to Unicode", table version 1.0 (2011-07-12), at unicode.org/Public/MAPPINGS/VENDORS/ADOBE/ | Unicode, Inc.'s notice in the file: "Unicode, Inc. hereby grants the right to freely use the information supplied in this file in the creation of products supporting the Unicode Standard, and to make copies of this file in any form for internal or external distribution as long as this notice remains attached." The file is provided as-is, without warranties | Separate from Adobe's Core 14 notice (previous row), which covers the character codes and widths; the Unicode values come from this table |
+# Aura Dark palette
+
+The Aura Dark interface palette in `crates/ui-egui/src/theme.rs` is adapted from
+[Aura Theme](https://github.com/daltonmenezes/aura-theme), by Dalton Menezes,
+MIT license:
+
+> Copyright (c) 2021 - * Dalton Menezes
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.

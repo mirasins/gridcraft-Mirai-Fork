@@ -104,6 +104,10 @@ fn interface_skin_command_changes_and_persists_the_preference() {
 
     assert!(app.run("view.themeSkin", json!({"skin": "neon"})).is_err());
     assert_eq!(app.ui.skin, crate::theme::Skin::Mirai, "refusing an unknown skin keeps the active choice");
+    assert_eq!(app.run("view.themeSkin", json!({"skin": "aura-dark"})).unwrap(), json!({"skin": "aura-dark"}));
+    let saved = serde_json::to_value(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_value(saved).unwrap();
+    assert_eq!(restored.skin, crate::theme::Skin::AuraDark);
 }
 
 /// One headless UI pass. A test has no renderer to apply the font-atlas delta, so dropping

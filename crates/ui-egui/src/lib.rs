@@ -96,7 +96,7 @@ pub struct UiState {
     pub dark: bool,
     pub system_theme: bool,
     /// The interface skin (palette family), chosen independently of light, dark or system. Saved
-    /// as `"classic"` or `"mirai"`; an unknown value reads as the default.
+    /// as `"classic"`, `"mirai"` or `"aura-dark"`; an unknown value reads as the default.
     #[serde(deserialize_with = "theme::lenient_skin")]
     pub skin: theme::Skin,
     pub ribbon_tab: String,
