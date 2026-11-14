@@ -326,14 +326,24 @@ mod tests {
     // --- frames ---
 
     fn harness(s: Session) -> Harness {
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(
-            |ui, app: &mut SheetApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            SheetApp::new(s, Default::default()),
-        );
+        // Pin fonts like `tests/common`: without prepared fonts, opening another workbook can
+        // rebind faces and clear the chart cache mid-test (CI hosts finish the scan quickly).
+        let mut app = SheetApp::new(s, Default::default());
+        app.use_prepared_fonts();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1400.0, 900.0))
+            .with_context_setup(|ctx| {
+                ctx.set_fonts(crate::theme::pinned_font_definitions());
+                crate::theme::apply(ctx, false);
+            })
+            .build_ui_state(
+                |ui, app: &mut SheetApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
         h.run_steps(8);
         h
     }
