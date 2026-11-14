@@ -194,9 +194,7 @@ impl Language {
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
     /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
-        crate::brand::rebrand(
-            self.translated(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label)),
-        )
+        crate::brand::rebrand(self.translated(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label)))
     }
 
     /// The catalog's own translation of `text`, or `None` when it falls back to English.
@@ -370,8 +368,9 @@ mod tests {
     fn untranslated_text_falls_back_to_english() {
         let label = |key: &'static str| key.rsplit_once('|').map_or(key, |(_, label)| label);
         for (english, _) in ja::CORE {
-            assert_eq!(Language::En.tr(english), label(english));
+            assert_eq!(Language::En.tr(english), crate::brand::rebrand(label(english)));
         }
+        assert_eq!(Language::En.tr("About\nGridCraft"), "About\nMirai Calc");
         for language in Language::ALL {
             assert_eq!(language.tr("Sheet1!A1"), "Sheet1!A1");
             assert_eq!(language.tr("Not in any catalog|Untranslated"), "Untranslated");
